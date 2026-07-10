@@ -3018,23 +3018,109 @@ os.makedirs(_VIDEO_CACHE_DIR, exist_ok=True)
 _vlc_prefetch_tasks: dict[int, asyncio.Task] = {}
 
 
-def _vlc_cache_path(msg_id: int, offset: int) -> str:
-    return os.path.join(_VIDEO_CACHE_DIR, f"{msg_id}_{offset}.bin")
+class VlcSingleFileCache:
+    """Thread-safe, asyncio-safe single-file cache for per-video VLC raw block data.
+
+    All blocks for a given msg_id are stored contiguously in one sparse binary
+    file ({msg_id}.bin) with the block offsets tracked in a companion JSON sidecar
+    ({msg_id}.json).  Using a single file avoids the cost of creating/deleting
+    tens-of-thousands of small 1 MB files per video on Windows NTFS.
+
+    File I/O is performed inside a thread-pool executor so it never blocks the
+    asyncio event loop.
+    """
+
+    def __init__(self, msg_id: int):
+        self.msg_id = msg_id
+        self.bin_path = os.path.join(_VIDEO_CACHE_DIR, f"{msg_id}.bin")
+        self.json_path = os.path.join(_VIDEO_CACHE_DIR, f"{msg_id}.json")
+        self.cached_offsets: set[int] = set()
+        self._lock = threading.Lock()  # guards cached_offsets + file ops
+        self._load()
+
+    # ── Sync helpers (run inside executor) ───────────────────────────────────
+
+    def _load(self):
+        try:
+            if os.path.exists(self.json_path):
+                with open(self.json_path, "r") as f:
+                    self.cached_offsets = set(json.load(f))
+        except Exception:
+            pass
+
+    def _save(self):
+        try:
+            with open(self.json_path, "w") as f:
+                json.dump(list(self.cached_offsets), f)
+        except Exception:
+            pass
+
+    def _read_block_sync(self, offset: int, block_size: int) -> bytes:
+        with self._lock:
+            if offset not in self.cached_offsets:
+                return b""
+            try:
+                if not os.path.exists(self.bin_path):
+                    return b""
+                with open(self.bin_path, "rb") as f:
+                    f.seek(offset)
+                    return f.read(block_size)
+            except Exception:
+                return b""
+
+    def _write_block_sync(self, offset: int, block: bytes):
+        with self._lock:
+            try:
+                mode = "r+b" if os.path.exists(self.bin_path) else "w+b"
+                with open(self.bin_path, mode) as f:
+                    f.seek(offset)
+                    f.write(block)
+                self.cached_offsets.add(offset)
+                self._save()
+            except Exception as e:
+                print(f"[vlc_single_cache] error writing offset {offset}: {e}")
+
+    def has_offset_sync(self, offset: int) -> bool:
+        with self._lock:
+            return offset in self.cached_offsets
+
+    def prune_offsets(self, current_offset: int, cache_limit_bytes: int):
+        with self._lock:
+            to_remove = [off for off in self.cached_offsets if off < current_offset - cache_limit_bytes]
+            if to_remove:
+                for off in to_remove:
+                    self.cached_offsets.discard(off)
+                self._save()
+
+    # ── Async wrappers (use executor so they don't block the event loop) ─────
+
+    async def has_offset(self, offset: int) -> bool:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.has_offset_sync, offset)
+
+    async def read_block(self, offset: int, block_size: int) -> bytes:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._read_block_sync, offset, block_size)
+
+    async def write_block(self, offset: int, block: bytes):
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._write_block_sync, offset, block)
+
+
+_vlc_active_caches: dict[int, VlcSingleFileCache] = {}
+
+
+def _get_vlc_cache(msg_id: int) -> VlcSingleFileCache:
+    if msg_id not in _vlc_active_caches:
+        _vlc_active_caches[msg_id] = VlcSingleFileCache(msg_id)
+    return _vlc_active_caches[msg_id]
 
 
 def _vlc_prune_cache(msg_id: int, current_offset: int, cache_limit_bytes: int):
-    """Remove cached block files that are too far behind the playhead."""
+    """Prune cached offset list that are too far behind the playhead."""
     try:
-        for entry in os.scandir(_VIDEO_CACHE_DIR):
-            if entry.is_file() and entry.name.startswith(f"{msg_id}_"):
-                try:
-                    parts = entry.name.split("_")
-                    if len(parts) == 2 and parts[1].endswith(".bin"):
-                        file_offset = int(parts[1][:-4])
-                        if file_offset < current_offset - cache_limit_bytes:
-                            os.remove(entry.path)
-                except Exception:
-                    pass
+        cache_mgr = _get_vlc_cache(msg_id)
+        cache_mgr.prune_offsets(current_offset, cache_limit_bytes)
     except Exception as e:
         print(f"[vlc_cache] prune error: {e}")
 
@@ -3072,20 +3158,17 @@ async def _vlc_prefetch_run(msg, current_offset: int, cache_limit_bytes: int):
     file_size = getattr(msg.media.document, "size", None) if msg.media else None
     if not file_size:
         return
+    cache_mgr = _get_vlc_cache(msg_id)
     for i in range(1, _VLC_PREFETCH_BLOCKS + 1):
         target_offset = current_offset + i * _VLC_BLOCK_SIZE
         if target_offset >= file_size:
             break
-        path = _vlc_cache_path(msg_id, target_offset)
-        if os.path.exists(path):
+        if await cache_mgr.has_offset(target_offset):
             continue
         try:
             block = await _download_block_pool(msg, target_offset)
             if block:
-                temp = path + ".tmp"
-                with open(temp, "wb") as f:
-                    f.write(block)
-                os.replace(temp, path)
+                await cache_mgr.write_block(target_offset, block)
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -3138,22 +3221,15 @@ async def _iter_tg_pool(msg, start: int = 0):
                 if file_size and off >= file_size:
                     break
                 block = b""
-                path = _vlc_cache_path(msg.id, off)
-                if os.path.exists(path):
-                    try:
-                        with open(path, "rb") as f:
-                            block = f.read()
-                    except Exception:
-                        pass
+                cache_mgr = _get_vlc_cache(msg.id)
+                if await cache_mgr.has_offset(off):
+                    block = await cache_mgr.read_block(off, _VLC_BLOCK_SIZE)
 
                 if not block:
                     try:
                         block = await _download_block_pool(msg, off)
                         if block:
-                            temp = path + ".tmp"
-                            with open(temp, "wb") as f:
-                                f.write(block)
-                            os.replace(temp, path)
+                            await cache_mgr.write_block(off, block)
                     except Exception:
                         pass
 
@@ -3751,18 +3827,16 @@ def _clear_one(msg_id: int) -> None:
         except Exception:
             pass
 
-    # 4. Per-block video_cache/ files for this msg_id
-    try:
-        if os.path.exists(_VIDEO_CACHE_DIR):
-            for entry in os.scandir(_VIDEO_CACHE_DIR):
-                if entry.is_file() and entry.name.startswith(f"{msg_id}_"):
-                    try:
-                        os.remove(entry.path)
-                        print(f"[vlc_cache] deleted {entry.name}")
-                    except Exception:
-                        pass
-    except Exception as e:
-        print(f"[vlc_cache] error deleting files for msg={msg_id}: {e}")
+    # 4. Per-video single-file cache for VLC RAW STREAM
+    _vlc_active_caches.pop(msg_id, None)
+    for suffix in (".bin", ".json"):
+        fp = os.path.join(_VIDEO_CACHE_DIR, f"{msg_id}{suffix}")
+        try:
+            if os.path.exists(fp):
+                os.remove(fp)
+                print(f"[vlc_cache] deleted {os.path.basename(fp)}")
+        except Exception:
+            pass
 
 
 def prepare_new_stream_session(msg_id: int) -> None:
@@ -3807,7 +3881,7 @@ def prepare_new_stream_session(msg_id: int) -> None:
             for entry in os.scandir(_VIDEO_CACHE_DIR):
                 if entry.is_file():
                     name = entry.name
-                    if not name.startswith(f"{msg_id}_"):
+                    if name not in (f"{msg_id}.bin", f"{msg_id}.json"):
                         try:
                             os.remove(entry.path)
                             print(f"[vlc_cache] deleted orphaned/other cache file: {name}")
