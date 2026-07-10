@@ -257,6 +257,31 @@ async def compression_middleware(req, handler):
     return resp
 
 
+@web.middleware
+async def error_middleware(req: web.Request, handler):
+    """Catch unhandled errors from dropped connections (WinError 64 / sleep/wake)
+    so aiohttp doesn't render its default '500 Server got itself in trouble' page.
+    This is triggered when VLC or a browser disconnects mid-stream (e.g. after a
+    network reset on Windows).  The AssertionError is aiohttp's internal transport
+    guard, not an application-level bug."""
+    try:
+        return await handler(req)
+    except web.HTTPException:
+        raise  # let aiohttp handle normal HTTP exceptions (404, 302, etc.)
+    except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+        # client disconnected — nothing to do, aiohttp will close the connection
+        raise web.HTTPClientError(reason="Client disconnected")
+    except AssertionError:
+        # aiohttp internal guard fires when transport is None at request creation;
+        # this happens on Windows when the network interface resets (WinError 64)
+        raise web.HTTPServiceUnavailable(reason="Connection lost")
+    except Exception as exc:
+        import traceback as _tb
+        print(f"[routes] Unhandled route error: {exc}")
+        _tb.print_exc()
+        return web.Response(status=500, text="Internal server error")
+
+
 # ── LOGIN / LOGOUT ────────────────────────────────────────────────────────────
 async def route_login_get(req: web.Request):
     return web.Response(content_type="text/html", text=_login_page())
@@ -2844,7 +2869,7 @@ async def route_notifications(req: web.Request):
 # ── APP FACTORY ───────────────────────────────────────────────────────────────
 def make_app():
     app = web.Application(
-        middlewares=[compression_middleware, auth_middleware],
+        middlewares=[error_middleware, compression_middleware, auth_middleware],
         client_max_size=64 * 1024 * 1024,
     )
     app.router.add_get("/login", route_login_get)
