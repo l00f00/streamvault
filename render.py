@@ -380,11 +380,14 @@ def _nav(placeholder="Search albums…", show_search=True):
     <h3>Stream History</h3>
     <button class="history-close-btn" onclick="document.getElementById('historyCard').style.display='none'">&times;</button>
   </div>
+  <div class="history-search-container" style="padding:10px 18px;border-bottom:1px solid #1c1c1c;">
+    <input type="text" id="historySearchInput" placeholder="Search stream history..." style="width:100%;padding:8px 12px;background:#161616;border:1px solid #252525;border-radius:6px;color:#e8e8e8;font-size:.78rem;outline:none;transition:border-color .15s;" oninput="filterHistory(this.value)">
+  </div>
   <div class="history-card-list" id="historyList">
     <div class="history-loading">Loading...</div>
   </div>
 </div>
-<style>.history-card{{position:fixed;top:54px;right:max(16px,3vw);width:560px;max-height:600px;background:#0d0d0d;border:1.5px solid #252525;border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,.8);z-index:1001;display:flex;flex-direction:column;overflow:hidden;}}.history-card-header{{display:flex;align-items:center;justify-content:space-between;padding:14px 18px 10px;border-bottom:1px solid #1c1c1c;}}.history-card-header h3{{font-size:.84rem;font-weight:800;color:#e8e8e8;letter-spacing:.02em;}}.history-close-btn{{background:none;border:none;color:#606060;font-size:1.2rem;cursor:pointer;transition:color .2s;}}.history-close-btn:hover{{color:#e8e8e8;}}.history-card-list{{flex:1;overflow-y:auto;padding:6px 0;}}.history-loading{{padding:24px;text-align:center;color:#606060;font-size:.78rem;}}.history-item{{display:flex;align-items:center;gap:14px;padding:10px 18px;transition:background .15s;cursor:default;}}.history-item:hover{{background:rgba(245,197,24,.06);}}.history-item-thumb{{width:72px;height:54px;border-radius:6px;background:var(--surface);flex-shrink:0;overflow:hidden;}}.history-item-thumb img{{width:100%;height:100%;object-fit:cover;}}.history-item-info{{flex:1;min-width:0;}}.history-item-title{{font-size:.82rem;font-weight:700;color:#e8e8e8;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-clamp:2;overflow:hidden;}}.history-item-meta{{font-size:.68rem;color:#606060;margin-top:2px;display:flex;gap:6px;align-items:center;}}.history-item-actions{{display:flex;gap:4px;flex-shrink:0;}}.history-action-btn{{width:28px;height:28px;border-radius:6px;border:1px solid #1c1c1c;background:transparent;color:#606060;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color .15s,color .15s;}}.history-action-btn:hover{{border-color:var(--accent);color:var(--accent);}}.history-action-btn svg{{width:12px;height:12px;}}.history-empty{{padding:32px 24px;text-align:center;color:#606060;font-size:.78rem;}}@media(max-width:640px){{.history-card{{width:calc(100vw - 32px);right:16px;}}}}</style>
+<style>.history-card{{position:fixed;top:54px;right:max(16px,3vw);width:560px;max-height:600px;background:#0d0d0d;border:1.5px solid #252525;border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,.8);z-index:1001;display:flex;flex-direction:column;overflow:hidden;}}.history-card-header{{display:flex;align-items:center;justify-content:space-between;padding:14px 18px 10px;border-bottom:1px solid #1c1c1c;}}.history-card-header h3{{font-size:.84rem;font-weight:800;color:#e8e8e8;letter-spacing:.02em;}}.history-close-btn{{background:none;border:none;color:#606060;font-size:1.2rem;cursor:pointer;transition:color .2s;}}.history-close-btn:hover{{color:#e8e8e8;}}.history-card-list{{flex:1;overflow-y:auto;padding:6px 0;}}.history-loading{{padding:24px;text-align:center;color:#606060;font-size:.78rem;}}.history-item{{display:flex;align-items:center;gap:14px;padding:10px 18px;transition:background .15s;cursor:default;}}.history-item:hover{{background:rgba(245,197,24,.06);}}.history-item-thumb{{width:72px;height:54px;border-radius:6px;background:var(--surface);flex-shrink:0;overflow:hidden;}}.history-item-thumb img{{width:100%;height:100%;object-fit:cover;}}.history-item-info{{flex:1;min-width:0;}}.history-item-title{{font-size:.82rem;font-weight:700;color:#e8e8e8;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-clamp:2;overflow:hidden;}}.history-item-meta{{font-size:.68rem;color:#606060;margin-top:2px;display:flex;gap:6px;align-items:center;}}.history-item-actions{{display:flex;gap:4px;flex-shrink:0;}}.history-action-btn{{width:28px;height:28px;border-radius:6px;border:1px solid #1c1c1c;background:transparent;color:#606060;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color .15s,color .15s;}}.history-action-btn:hover{{border-color:var(--accent);color:var(--accent);}}.history-action-btn svg{{width:12px;height:12px;}}.history-empty{{padding:32px 24px;text-align:center;color:#606060;font-size:.78rem;}}.history-more-btn:hover{{background:rgba(245,197,24,.06);border-color:var(--accent);color:var(--accent);}}#historySearchInput:focus{{border-color:var(--accent);}}@media(max-width:640px){{.history-card{{width:calc(100vw - 32px);right:16px;}}}}</style>
 <div class="nav-drawer" id="navDrawer">
   <div class="search-box" style="width:100%;">
     <svg class="search-ico" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -464,42 +467,104 @@ document.addEventListener('click',function(e){{
   ['navSettingsBtn','navSettingsMobile'].forEach(function(id){{var el=document.getElementById(id);if(el)el.addEventListener('click',_clearBell,{{passive:true}});}});
 }})();
 var _historyLoaded=false;
+var _historyOffset=0;
+var _historyLimit=50;
+var _historySearchQuery="";
+var _historySearchTimeout=null;
 window.toggleHistoryCard = function(e){{
   e.preventDefault();e.stopPropagation();
   var card=document.getElementById('historyCard');
   if(!card)return;
   if(card.style.display==='none'){{
     card.style.display='flex';
-    if(!_historyLoaded){{loadHistory();_historyLoaded=true;}}
+    var searchInput=document.getElementById('historySearchInput');
+    if(searchInput){{searchInput.value="";}}
+    _historySearchQuery="";
+    if(!_historyLoaded){{loadHistory(false);_historyLoaded=true;}}
+    else{{loadHistory(false);}}
   }}else{{
     card.style.display='none';
   }}
 }}
-function loadHistory(){{
+window.filterHistory = function(val){{
+  clearTimeout(_historySearchTimeout);
+  _historySearchTimeout=setTimeout(function(){{
+    _historySearchQuery=val;
+    loadHistory(false);
+  }},250);
+}}
+function loadHistory(append){{
   var list=document.getElementById('historyList');
   if(!list)return;
-  list.innerHTML='<div class="history-loading">Loading...</div>';
-  fetch('/api/history').then(function(r){{return r.json();}}).then(function(d){{
-    if(!d.ok||!d.history||!d.history.length){{list.innerHTML='<div class="history-empty">No stream history yet</div>';return;}}
+  if(!append){{
+    _historyOffset=0;
+    list.innerHTML='<div class="history-loading">Loading...</div>';
+  }}else{{
+    var moreContainer=document.getElementById('historyMoreContainer');
+    if(moreContainer) moreContainer.remove();
+  }}
+  var url='/api/history?limit='+_historyLimit+'&offset='+_historyOffset;
+  if(_historySearchQuery){{
+    url+='&q='+encodeURIComponent(_historySearchQuery);
+  }}
+  fetch(url).then(function(r){{return r.json();}}).then(function(d){{
+    if(!d.ok||!d.history||!d.history.length){{
+      if(!append){{
+        list.innerHTML=_historySearchQuery ? '<div class="history-empty">No results found</div>' : '<div class="history-empty">No stream history yet</div>';
+      }}
+      return;
+    }}
     var html='';
     d.history.forEach(function(h){{
+      var progressHtml = '';
+      var resumeTextHtml = '';
+      if(h.resume_pos && h.resume_pos > 5){{
+        var percent = 0;
+        if(h.resume_dur && h.resume_dur > 0){{
+          percent = Math.min(100, Math.round((h.resume_pos / h.resume_dur) * 100));
+        }}
+        var hrs = Math.floor(h.resume_pos / 3600);
+        var mins = Math.floor((h.resume_pos % 3600) / 60);
+        var secs = Math.floor(h.resume_pos % 60);
+        var tStr = '';
+        if(hrs > 0) {{ tStr += hrs + ':'; }}
+        tStr += (mins < 10 && hrs > 0 ? '0' : '') + mins + ':';
+        tStr += (secs < 10 ? '0' : '') + secs;
+        resumeTextHtml = '<span style="color:var(--accent);font-weight:600;">Resume at ' + tStr + (percent > 0 ? ' ('+percent+'%)' : '') + '</span>';
+        progressHtml = '<div style="position:absolute;bottom:0;left:0;height:3px;background:var(--accent);width:'+percent+'%;"></div>';
+      }}
       var thumb=h.thumb_url?'<img src="'+h.thumb_url+'" alt="">':'';
       var dur=h.duration?'<span>'+h.duration+'</span>':'';
       var qual=h.quality?'<span>'+h.quality+'</span>':'';
       var alb=h.album?'<a href="/album/'+encodeURIComponent(h.album)+'" style="color:var(--accent);text-decoration:none;">'+h.album+'</a>':'';
       html+='<div class="history-item">'
-        +'<div class="history-item-thumb">'+thumb+'</div>'
+        +'<div class="history-item-thumb" style="position:relative;">'+thumb+progressHtml+'</div>'
         +'<div class="history-item-info">'
         +'<div class="history-item-title">'+(h.title||'Untitled')+'</div>'
-        +'<div class="history-item-meta">'+dur+qual+alb+'</div>'
+        +'<div class="history-item-meta">'+dur+qual+resumeTextHtml+alb+'</div>'
         +'</div>'
         +'<div class="history-item-actions">'
         +'<button class="history-action-btn" data-tip="Resume in VLC" data-action="vlc" data-mid="'+h.message_id+'" data-alb="'+encodeURIComponent(h.album||'')+'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3" fill="currentColor" stroke="none"/></svg></button>'
         +'<button class="history-action-btn" data-tip="Remove" data-action="remove" data-mid="'+h.message_id+'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>'
         +'</div></div>';
     }});
-    list.innerHTML=html;
-  }}).catch(function(){{list.innerHTML='<div class="history-empty">Failed to load history</div>';}});
+    if(!append){{
+      list.innerHTML=html;
+    }}else{{
+      list.insertAdjacentHTML('beforeend', html);
+    }}
+    _historyOffset+=d.history.length;
+    if(d.history.length===_historyLimit){{
+      var moreHtml='<div class="history-more-container" id="historyMoreContainer" style="padding:12px;text-align:center;">'
+        +'<button class="history-more-btn" id="historyMoreBtn" onclick="event.stopPropagation();loadHistory(true)" style="background:transparent;border:1px solid #252525;color:#e8e8e8;padding:6px 16px;border-radius:6px;font-size:.78rem;cursor:pointer;transition:background .15s,border-color .15s;">See More</button>'
+        +'</div>';
+      list.insertAdjacentHTML('beforeend', moreHtml);
+    }}
+  }}).catch(function(){{
+    if(!append){{
+      list.innerHTML='<div class="history-empty">Failed to load history</div>';
+    }}
+  }});
 }}
 document.addEventListener('click',function(e){{
   var btn=e.target.closest('[data-action]');
@@ -556,6 +621,9 @@ def _render_index(albums, total):
         m = a.get("meta", {}) or {}
         year = m.get("year", "") or ""
         year = re.sub(r"[\u2013\u2014\-]+\s*$", "", year).strip()
+        # Find latest video update date in the album
+        dates = [v.get("date", "") for v in a.get("videos", []) if v.get("date")]
+        latest_date = max(dates) if dates else ""
         album_data.append(
             {
                 "name": a["name"],
@@ -567,6 +635,7 @@ def _render_index(albums, total):
                 "rating": _fmt_rating(m.get("rating", "") or ""),
                 "mtype": m.get("type", "") or "",
                 "plot": (m.get("plot", "") or "")[:300],
+                "updated": latest_date,
             }
         )
 
@@ -585,7 +654,8 @@ def _render_index(albums, total):
     </div>
   </div>
   <div class="sec-row"><h2>Albums</h2><span class="pill">{len(albums)}</span><div class="divider"></div>
-    <div style="display:flex;gap:6px;margin-left:auto;">
+    <div style="display:flex;gap:6px;margin-left:auto;align-items:center;">
+      <span style="font-size:0.7rem;color:var(--text3);font-weight:600;margin-right:2px;text-transform:uppercase;letter-spacing:0.5px;">Filter:</span>
       <button class="alb-filter-btn"        id="fltAll"    onclick="_setFilter('all')">All</button>
       <button class="alb-filter-btn active" id="fltSeries" onclick="_setFilter('series')">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
@@ -594,6 +664,15 @@ def _render_index(albums, total):
       <button class="alb-filter-btn"        id="fltMovies" onclick="_setFilter('movie')">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="2" y="2" width="20" height="20" rx="2"/><path d="M7 2v20M17 2v20M2 12h20M2 7h5M17 7h5M2 17h5M17 17h5"/></svg>
         Movies
+      </button>
+      <span style="font-size:0.7rem;color:var(--text3);font-weight:600;margin-left:10px;margin-right:2px;text-transform:uppercase;letter-spacing:0.5px;">Sort:</span>
+      <button class="alb-filter-btn active" id="srtDate" onclick="_setSort('date')">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        Recent
+      </button>
+      <button class="alb-filter-btn" id="srtAlpha" onclick="_setSort('alpha')">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h6"/></svg>
+        A-Z
       </button>
     </div>
   </div>
@@ -653,6 +732,7 @@ def _render_index(albums, total):
   function _overscan(){{ return 2+Math.min(4,Math.floor(Math.abs(_vy)/0.4)); }}
   var _filtered = [];
   var _activeFilter = (function(){{try{{return sessionStorage.getItem('sv_home_filter')||'series';}}catch(e){{return 'series';}}}})();
+  var _activeSort = (function(){{try{{return sessionStorage.getItem('sv_home_sort')||'date';}}catch(e){{return 'date';}}}})();
   function rowCount(){{ return Math.ceil(_filtered.length/COLS); }}
   function totalH(){{ return Math.max(0,rowCount()*(CARD_H+GAP)-GAP)+80; }}
   function cardTop(i){{ return Math.floor(i/COLS)*(CARD_H+GAP); }}
@@ -758,6 +838,18 @@ def _render_index(albums, total):
       var matchT=_activeFilter==='all'||a.mtype.toLowerCase()===_activeFilter;
       return matchQ&&matchT;
     }});
+    if(_activeSort==='date'){{
+      _filtered.sort(function(a,b){{
+        var da=a.updated||'';
+        var db=b.updated||'';
+        if(da!==db) return db.localeCompare(da);
+        return a.name.localeCompare(b.name);
+      }});
+    }}else if(_activeSort==='alpha'){{
+      _filtered.sort(function(a,b){{
+        return a.name.localeCompare(b.name);
+      }});
+    }}
   }}
   window._setFilter=function(type){{
     _activeFilter=type;
@@ -766,6 +858,19 @@ def _render_index(albums, total):
       var id='flt'+l,el=document.getElementById(id);
       if(el)el.classList.toggle('active',
         (l==='All'&&type==='all')||(l==='Series'&&type==='series')||(l==='Movies'&&type==='movie'));
+    }});
+    var q=document.getElementById('searchInput');
+    _rebuildFiltered(q?q.value.toLowerCase().trim():'');
+    resetPool();window.scrollTo({{top:0,behavior:'instant'}});
+    _recacheLayout();var th=totalH()+'px';sentinel.style.height=th;grid.style.minHeight=th;render();
+  }};
+  window._setSort=function(type){{
+    _activeSort=type;
+    try{{sessionStorage.setItem('sv_home_sort',type);}}catch(e){{}}
+    ['Date','Alpha'].forEach(function(l){{
+      var id='srt'+l,el=document.getElementById(id);
+      if(el)el.classList.toggle('active',
+        (l==='Date'&&type==='date')||(l==='Alpha'&&type==='alpha'));
     }});
     var q=document.getElementById('searchInput');
     _rebuildFiltered(q?q.value.toLowerCase().trim():'');
@@ -834,6 +939,10 @@ def _render_index(albums, total):
   ['All','Series','Movies'].forEach(function(l){{
     var id='flt'+l,el=document.getElementById(id);
     if(el)el.classList.toggle('active', (l==='All'&&_activeFilter==='all')||(l==='Series'&&_activeFilter==='series')||(l==='Movies'&&_activeFilter==='movie'));
+  }});
+  ['Date','Alpha'].forEach(function(l){{
+    var id='srt'+l,el=document.getElementById(id);
+    if(el)el.classList.toggle('active', (l==='Date'&&_activeSort==='date')||(l==='Alpha'&&_activeSort==='alpha'));
   }});
   requestAnimationFrame(function(){{
     _recacheLayout();

@@ -525,7 +525,38 @@ def _history_init() -> sqlite3.Connection:
     _history_conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_history_last ON stream_history(last_played DESC)"
     )
+    _history_conn.execute("""CREATE TABLE IF NOT EXISTS resume_positions(
+            message_id INTEGER PRIMARY KEY,
+            pos REAL,
+            dur REAL,
+            updated_at INTEGER
+        )""")
     _history_conn.commit()
+
+    # Migrate from JSON to DB if resume_positions.json exists
+    json_path = os.path.join(_here, "resume_positions.json")
+    if os.path.exists(json_path):
+        import time
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for k, v in data.items():
+                if isinstance(v, dict):
+                    msg_id = int(k)
+                    pos = float(v.get("pos", 0) or 0)
+                    dur = float(v.get("dur", 0) or 0)
+                    _history_conn.execute(
+                        """INSERT INTO resume_positions(message_id, pos, dur, updated_at)
+                           VALUES(?, ?, ?, ?)
+                           ON CONFLICT(message_id) DO UPDATE SET pos=excluded.pos, dur=excluded.dur, updated_at=excluded.updated_at""",
+                        (msg_id, pos, dur, int(time.time()))
+                    )
+            _history_conn.commit()
+            os.rename(json_path, json_path + ".migrated")
+            print("[resume] Migrated resume positions from JSON to SQLite database.")
+        except Exception as e:
+            print(f"[resume] Migration error: {e}")
+
     return _history_conn
 
 
@@ -564,17 +595,28 @@ def history_add(
     conn.commit()
 
 
-def history_list(limit: int = 50) -> list:
+def history_list(limit: int = 50, offset: int = 0, q: str = None) -> list:
     """Return history entries sorted by last_played DESC, deduped by message_id."""
     try:
         conn = _history_init()
-        rows = conn.execute(
-            """SELECT message_id, title, album, thumb_url, duration, quality, size, last_played, play_count
-               FROM stream_history
-               ORDER BY last_played DESC
-               LIMIT ?""",
-            (limit,),
-        ).fetchall()
+        if q:
+            query = """SELECT h.message_id, h.title, h.album, h.thumb_url, h.duration, h.quality, h.size, h.last_played, h.play_count, r.pos, r.dur
+                       FROM stream_history h
+                       LEFT JOIN resume_positions r ON h.message_id = r.message_id
+                       WHERE h.title LIKE ? OR h.album LIKE ?
+                       ORDER BY h.last_played DESC
+                       LIMIT ? OFFSET ?"""
+            like_val = f"%{q}%"
+            rows = conn.execute(query, (like_val, like_val, limit, offset)).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT h.message_id, h.title, h.album, h.thumb_url, h.duration, h.quality, h.size, h.last_played, h.play_count, r.pos, r.dur
+                   FROM stream_history h
+                   LEFT JOIN resume_positions r ON h.message_id = r.message_id
+                   ORDER BY h.last_played DESC
+                   LIMIT ? OFFSET ?""",
+                (limit, offset),
+            ).fetchall()
         return [
             {
                 "message_id": r[0],
@@ -586,6 +628,8 @@ def history_list(limit: int = 50) -> list:
                 "size": r[6] or "",
                 "last_played": r[7],
                 "play_count": r[8],
+                "resume_pos": r[9],
+                "resume_dur": r[10],
             }
             for r in rows
         ]
@@ -600,6 +644,9 @@ def history_remove(message_id: int) -> bool:
         conn = _history_init()
         cursor = conn.execute(
             "DELETE FROM stream_history WHERE message_id = ?", (message_id,)
+        )
+        conn.execute(
+            "DELETE FROM resume_positions WHERE message_id = ?", (message_id,)
         )
         conn.commit()
         return cursor.rowcount > 0
@@ -946,51 +993,42 @@ async def _fetch_all_meta(album_names: list) -> dict:
 
 
 # ── RESUME POSITIONS ──────────────────────────────────────────────────────────
-_RESUME_FILE = os.path.join(_here, "resume_positions.json")
-_resume_mem: dict = {}
-
-
-def _load_resume() -> dict:
-    global _resume_mem
-    if _resume_mem:
-        return _resume_mem
-    if not os.path.exists(_RESUME_FILE):
-        _resume_mem = {}
-        return {}
-    try:
-        with open(_RESUME_FILE, "r", encoding="utf-8") as f:
-            _resume_mem = json.load(f)
-    except Exception:
-        _resume_mem = {}
-    return _resume_mem
-
-
-def _save_resume() -> None:
-    try:
-        with open(_RESUME_FILE, "w", encoding="utf-8") as f:
-            json.dump(_resume_mem, f)
-    except Exception as e:
-        print(f"[resume] save error: {e}")
-
-
 def resume_get(msg_id: int) -> float:
     """Return saved playback position in seconds for msg_id, or 0.0."""
-    _load_resume()
-    entry = _resume_mem.get(str(msg_id), {})
-    if not isinstance(entry, dict):
+    try:
+        conn = _history_init()
+        row = conn.execute(
+            "SELECT pos, dur FROM resume_positions WHERE message_id = ?",
+            (msg_id,),
+        ).fetchone()
+        if not row:
+            return 0.0
+        pos, dur = row[0], row[1]
+        if dur > 0 and pos >= dur - 30:
+            return 0.0
+        return pos
+    except Exception as e:
+        print(f"[resume] resume_get error: {e}")
         return 0.0
-    pos = float(entry.get("pos", 0) or 0)
-    dur = float(entry.get("dur", 0) or 0)
-    if dur > 0 and pos >= dur - 30:
-        return 0.0
-    return pos
 
 
 def resume_set(msg_id: int, pos: float, dur: float = 0.0) -> None:
     """Persist playback position for msg_id."""
-    _load_resume()
-    _resume_mem[str(msg_id)] = {"pos": round(pos, 1), "dur": round(dur, 1)}
-    _save_resume()
+    import time
+    try:
+        conn = _history_init()
+        conn.execute(
+            """INSERT INTO resume_positions(message_id, pos, dur, updated_at)
+               VALUES(?, ?, ?, ?)
+               ON CONFLICT(message_id) DO UPDATE SET pos=excluded.pos, dur=excluded.dur, updated_at=excluded.updated_at""",
+            (msg_id, round(pos, 1), round(dur, 1), int(time.time())),
+        )
+        conn.commit()
+        # Invalidate history cache so that the new resume position is updated
+        from cache import _api_cache
+        _api_cache.pop("history", None)
+    except Exception as e:
+        print(f"[resume] resume_set error: {e}")
 
 
 # ── IN-MEMORY CACHE ───────────────────────────────────────────────────────────

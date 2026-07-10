@@ -656,11 +656,28 @@ async def route_history(req: web.Request):
     """GET /api/history — list stream history."""
     from cache import api_cache_get, api_cache_set
 
-    cached = api_cache_get("history")
-    if cached is not None:
-        return _fast_json_response({"ok": True, "history": cached})
-    hist = history_list(limit=50)
-    api_cache_set("history", hist)
+    limit_val = req.query.get("limit")
+    offset_val = req.query.get("offset")
+    q = req.query.get("q", "").strip()
+
+    limit = 50
+    offset = 0
+    if limit_val is not None and limit_val.isdigit():
+        limit = int(limit_val)
+    if offset_val is not None and offset_val.isdigit():
+        offset = int(offset_val)
+
+    is_default = (limit == 50 and offset == 0 and not q)
+    if is_default:
+        cached = api_cache_get("history")
+        if cached is not None:
+            return _fast_json_response({"ok": True, "history": cached})
+
+    hist = history_list(limit=limit, offset=offset, q=q or None)
+
+    if is_default:
+        api_cache_set("history", hist)
+
     return _fast_json_response({"ok": True, "history": hist})
 
 
@@ -1368,6 +1385,10 @@ async def _vlc_position_poller(msg_id: int, duration: float, generation: int):
         # Only remove playhead if this is still the active generation
         if _poller_session.get(msg_id) == generation:
             _stream_cache.remove_playhead(msg_id)
+            try:
+                prepare_new_stream_session(msg_id)
+            except Exception as e:
+                print(f"[resume] error cleaning session on close: {e}")
         if _active_pollers.get(msg_id) == asyncio.current_task():
             _active_pollers.pop(msg_id, None)
     print(f"[resume] poller done msg={msg_id} gen={generation}")
@@ -1452,7 +1473,7 @@ async def _launch_vlc_direct(
             f"--http-password={_VLC_HTTP_PASS}",
             # Loopback delivery — reduce network-caching since 127.0.0.1 has
             # no real network jitter; large values only delay first-frame render.
-            "--network-caching=1500",
+            "--network-caching=2000",
             "--file-caching=0",
             "--live-caching=0",
             "--disc-caching=0",

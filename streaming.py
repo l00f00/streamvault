@@ -3688,9 +3688,30 @@ async def route_clear_stream_cache(req: web.Request):
         print(f"[clear_cache] evicted msg={msg_id}")
         return web.json_response({"ok": True, "cleared": [msg_id]})
     else:
+        # 1. Clear in-memory caches for all known keys
         ids = list(_stream_cache._data.keys())
         for mid in ids:
             _clear_one(mid)
+
+        # 2. Cancel all active progressive and prefetcher tasks
+        for mid in list(_progressive_tasks.keys()):
+            _cancel_progressive_task(mid)
+            _cancel_prefetch_task(mid)
+        for mid in list(_vlc_prefetch_tasks.keys()):
+            vlc_task = _vlc_prefetch_tasks.pop(mid, None)
+            if vlc_task and not vlc_task.done():
+                vlc_task.cancel()
+
+        # 3. Wipe and re-create _VIDEO_CACHE_DIR, _VLC_TMP_DIR, and _HLS_DIR directories entirely
+        for folder in (_VIDEO_CACHE_DIR, _VLC_TMP_DIR, _HLS_DIR):
+            try:
+                if os.path.exists(folder):
+                    shutil.rmtree(folder, ignore_errors=True)
+                    os.makedirs(folder, exist_ok=True)
+                    print(f"[clear_cache] wiped and recreated directory: {os.path.basename(folder)}")
+            except Exception as e:
+                print(f"[clear_cache] error wiping directory {folder}: {e}")
+
         print(f"[clear_cache] evicted all ({len(ids)} videos)")
         return web.json_response({"ok": True, "cleared": ids})
 
@@ -3730,13 +3751,70 @@ def _clear_one(msg_id: int) -> None:
         except Exception:
             pass
 
+    # 4. Per-block video_cache/ files for this msg_id
+    try:
+        if os.path.exists(_VIDEO_CACHE_DIR):
+            for entry in os.scandir(_VIDEO_CACHE_DIR):
+                if entry.is_file() and entry.name.startswith(f"{msg_id}_"):
+                    try:
+                        os.remove(entry.path)
+                        print(f"[vlc_cache] deleted {entry.name}")
+                    except Exception:
+                        pass
+    except Exception as e:
+        print(f"[vlc_cache] error deleting files for msg={msg_id}: {e}")
+
 
 def prepare_new_stream_session(msg_id: int) -> None:
     """Prepare a message ID for a new stream session by cancelling any existing prefetcher/progressive downloader tasks and clearing the cache."""
     print(f"[session] preparing new stream session for msg={msg_id}")
+    
+    # 1. Cancel progressive/prefetch/vlc_prefetch tasks for the current msg_id
     _cancel_prefetch_task(msg_id)
     _cancel_progressive_task(msg_id, clear_consumers=True)
+    vlc_task = _vlc_prefetch_tasks.pop(msg_id, None)
+    if vlc_task and not vlc_task.done():
+        vlc_task.cancel()
+
+    # 2. Cancel tasks for all other msg_ids as well
+    _cancel_progressive_others(msg_id)
+    for mid in list(_vlc_prefetch_tasks.keys()):
+        if mid != msg_id:
+            vlc_task = _vlc_prefetch_tasks.pop(mid, None)
+            if vlc_task and not vlc_task.done():
+                vlc_task.cancel()
+
+    # 3. Clear memory and disk caches for the current msg_id
     _clear_one(msg_id)
+
+    # 4. Delete cache files for ALL other videos from the disk to prevent storage filling up
+    try:
+        if os.path.exists(_VLC_TMP_DIR):
+            for entry in os.scandir(_VLC_TMP_DIR):
+                if entry.is_file():
+                    name = entry.name
+                    if name.startswith("video_") and not name.startswith(f"video_{msg_id}."):
+                        try:
+                            os.remove(entry.path)
+                            print(f"[disk_cache] deleted orphaned/other cache file: {name}")
+                        except Exception:
+                            pass
+    except Exception as e:
+        print(f"[session] error cleaning up other files in {_VLC_TMP_DIR}: {e}")
+
+    try:
+        if os.path.exists(_VIDEO_CACHE_DIR):
+            for entry in os.scandir(_VIDEO_CACHE_DIR):
+                if entry.is_file():
+                    name = entry.name
+                    if not name.startswith(f"{msg_id}_"):
+                        try:
+                            os.remove(entry.path)
+                            print(f"[vlc_cache] deleted orphaned/other cache file: {name}")
+                        except Exception:
+                            pass
+    except Exception as e:
+        print(f"[session] error cleaning up other files in {_VIDEO_CACHE_DIR}: {e}")
 
 
 async def _vlc_instant_prewarm(
