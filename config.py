@@ -110,6 +110,7 @@ LOGIN_REQUIRED = os.environ.get("LOGIN_REQUIRED", "1").strip().lower() not in (
     "no",
 )
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
+SUBDL_API_KEY = os.environ.get("SUBDL_API_KEY", "")
 
 # ── LOCAL BOT API SERVER ───────────────────────────────────────────────────────
 # When set, streaming uses the local Bot API server instead of Telethon MTProto.

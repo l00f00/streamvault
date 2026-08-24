@@ -3007,9 +3007,12 @@ async def route_apply_subtitle(req: web.Request):
             sub_msg_id = int(sub_msg_id)
         filename = str(j.get("filename", ""))
         source = str(j.get("source", "telegram"))
+        url = str(j.get("url", ""))
         from subtitles import apply_subtitle_option
 
-        sub_path = await apply_subtitle_option(msg_id, sub_msg_id, filename, source=source)
+        sub_path = await apply_subtitle_option(
+            msg_id, sub_msg_id, filename, source=source, url=url
+        )
         if sub_path:
             return web.json_response({"ok": True, "path": sub_path})
         return web.json_response({"ok": False, "error": "Failed to download selected subtitle"})

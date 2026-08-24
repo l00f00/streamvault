@@ -251,6 +251,7 @@ body{padding-top:60px;}
 .sub-modal-tag{display:inline-flex;align-items:center;padding:1px 6px;border-radius:4px;font-size:.62rem;font-weight:700;text-transform:uppercase;}
 .sub-modal-tag.tg{background:rgba(0,136,204,.15);color:#0088cc;border:1px solid rgba(0,136,204,.3);}
 .sub-modal-tag.yify{background:rgba(46,125,50,.15);color:#4caf50;border:1px solid rgba(76,175,80,.3);}
+.sub-modal-tag.subdl{background:rgba(234,88,12,.15);color:#f97316;border:1px solid rgba(249,115,22,.3);}
 .sub-modal-tag.match{background:rgba(245,197,24,.15);color:var(--accent);border:1px solid rgba(245,197,24,.3);}
 .sub-modal-select-btn{flex-shrink:0;background:var(--accent);color:#000;border:none;border-radius:6px;padding:6px 14px;font-size:.72rem;font-weight:700;cursor:pointer;transition:opacity .15s;}
 .sub-modal-select-btn:hover{opacity:.85;}

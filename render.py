@@ -1233,17 +1233,19 @@ function openSubChooser(id, btn){{
     html += '<div class="sub-modal-list">';
     d.options.forEach(function(opt, idx){{
       var isTg = opt.source === 'telegram';
-      var tagClass = isTg ? 'tg' : 'yify';
-      var tagLabel = isTg ? 'Telegram' : 'Yify Online';
+      var isSubdl = opt.source === 'subdl';
+      var tagClass = isTg ? 'tg' : (isSubdl ? 'subdl' : 'yify');
+      var tagLabel = isTg ? 'Telegram' : (isSubdl ? 'Subdl (' + (opt.language || 'EN') + (opt.hi ? ' SDH' : '') + ')' : 'Yify Online');
       var scoreLabel = opt.score > 0 ? (Math.round(Math.min(100, opt.score)) + '% Match') : '';
       var subIdStr = (opt.id !== null && opt.id !== undefined) ? opt.id : 'null';
-      var itemId = 'sub_opt_' + (opt.id || 'yify') + '_' + idx;
+      var optUrl = opt.url || '';
+      var itemId = 'sub_opt_' + (opt.id || opt.source || 'opt') + '_' + idx;
       html += '<div class="sub-modal-item" id="' + itemId + '">';
       html += '  <div style="flex:1;min-width:0">';
       html += '    <div class="sub-modal-item-title">' + opt.filename + '</div>';
       html += '    <div class="sub-modal-item-meta">';
       html += '      <span class="sub-modal-tag ' + tagClass + '">' + tagLabel + '</span>';
-      if(scoreLabel) html += '      <span class="sub-modal-tag match">' + scoreLabel + '</span>';
+      if(scoreLabel && isTg) html += '      <span class="sub-modal-tag match">' + scoreLabel + '</span>';
       if(opt.ext) html += '      <span style="text-transform:uppercase;color:#555">.' + opt.ext + '</span>';
       html += '    </div>';
       html += '  </div>';
@@ -1252,6 +1254,7 @@ function openSubChooser(id, btn){{
             + ' data-sid="' + subIdStr + '"'
             + ' data-fn="' + encodeURIComponent(opt.filename) + '"'
             + ' data-src="' + encodeURIComponent(opt.source) + '"'
+            + ' data-url="' + encodeURIComponent(optUrl) + '"'
             + '>Use This Subtitle</button>';
       html += '</div>';
     }});
@@ -1265,7 +1268,8 @@ function openSubChooser(id, btn){{
           var sid = this.dataset.sid === 'null' ? null : parseInt(this.dataset.sid);
           var fn  = decodeURIComponent(this.dataset.fn);
           var src = decodeURIComponent(this.dataset.src);
-          _applySub(mid, sid, fn, src, this);
+          var url = decodeURIComponent(this.dataset.url || '');
+          _applySub(mid, sid, fn, src, url, this);
         }});
       }});
     }}, 0);
@@ -1276,7 +1280,7 @@ function openSubChooser(id, btn){{
   }});
 }}
 
-function _applySub(msgId, subMsgId, filename, source, btn){{
+function _applySub(msgId, subMsgId, filename, source, url, btn){{
   if(btn){{btn.disabled=true;btn.textContent='Applying...';}}
   fetch('/api/subtitles/apply',{{
     method:'POST',
@@ -1285,7 +1289,8 @@ function _applySub(msgId, subMsgId, filename, source, btn){{
       msg_id: msgId,
       sub_msg_id: subMsgId,
       filename: filename,
-      source: source
+      source: source,
+      url: url
     }})
   }})
   .then(function(r){{return r.json();}})

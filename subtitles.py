@@ -454,6 +454,183 @@ def query_subtitle_index(
 
 
 
+# ── Subdl online search + download ────────────────────────────────────────────
+
+_SUBDL_SEARCH_URL = "https://api.subdl.com/api/v1/subtitles"
+_SUBDL_DL_BASE    = "https://dl.subdl.com"
+
+async def search_subdl(
+    title: str,
+    season: int | None = None,
+    episode: int | None = None,
+    imdb_id: str | None = None,
+    tmdb_id: int | None = None,
+    languages: str = "EN",
+) -> list[dict]:
+    """Search Subdl for subtitle candidates and return a normalised list.
+
+    Each item in the returned list has:
+        id          – unique subdl subtitle id (str)
+        filename    – display name shown in the picker
+        url         – full download URL (zip or srt)
+        language    – e.g. "EN"
+        ext         – "zip" or "srt"
+        hi          – bool (hearing impaired)
+        score       – float used for sorting in the picker
+        source      – "subdl"
+    """
+    api_key = _cfg.SUBDL_API_KEY
+    if not api_key:
+        return []
+
+    params: dict = {
+        "api_key": api_key,
+        "languages": languages,
+        "subs_per_page": 30,
+    }
+
+    if imdb_id and imdb_id.startswith("tt"):
+        params["imdb_id"] = imdb_id
+    elif tmdb_id:
+        params["tmdb_id"] = str(tmdb_id)
+    elif title:
+        params["film_name"] = title
+
+    if season is not None:
+        params["season_number"] = str(season)
+        params["type"] = "tv"
+    if episode is not None:
+        params["episode_number"] = str(episode)
+
+    headers = {
+        "User-Agent": "StreamVault/1.0",
+        "x-api-key": api_key,
+    }
+
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(
+                _SUBDL_SEARCH_URL, params=params, headers=headers, timeout=10
+            ) as resp:
+                if resp.status != 200:
+                    print(f"[subdl] Search failed: HTTP {resp.status}")
+                    return []
+                data = await resp.json(content_type=None)
+
+        if not data.get("status"):
+            print(f"[subdl] API error: {data.get('error', 'unknown')}")
+            return []
+
+        raw_subs = data.get("subtitles", [])
+        results = []
+        for sub in raw_subs:
+            url_path = sub.get("url", "")
+            if not url_path:
+                continue
+            full_url = (
+                url_path if url_path.startswith("http")
+                else f"{_SUBDL_DL_BASE}{url_path}"
+            )
+            ext = "zip" if full_url.lower().endswith(".zip") else "srt"
+            name = sub.get("release_name") or sub.get("name") or os.path.basename(url_path)
+            lang = sub.get("language") or sub.get("lang", "EN")
+            results.append({
+                "id": str(sub.get("id", url_path)),
+                "filename": name,
+                "url": full_url,
+                "language": lang,
+                "ext": ext,
+                "hi": bool(sub.get("hi", False)),
+                "score": 80.0,   # neutral; picker will show all results
+                "source": "subdl",
+            })
+
+        print(f"[subdl] Found {len(results)} subtitle(s) for '{title}'")
+        return results
+
+    except Exception as e:
+        print(f"[subdl] Search error for '{title}': {e}")
+        return []
+
+
+async def download_subdl_option(
+    msg_id: int,
+    url: str,
+    filename: str,
+    target_title: str = "",
+    target_filename: str = "",
+) -> str | None:
+    """Download a subtitle from Subdl (zip or raw srt) and cache it.
+
+    Handles:
+    - Raw .srt files -> normalise and cache directly.
+    - .zip files     -> extract best matching .srt using the existing archive logic.
+    """
+    cache_path = os.path.join(SUB_DIR, f"{msg_id}_en.srt")
+    temp_path  = cache_path + ".tmp"
+
+    headers = {"User-Agent": "StreamVault/1.0"}
+    api_key = _cfg.SUBDL_API_KEY
+    if api_key:
+        headers["x-api-key"] = api_key
+
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(url, headers=headers, timeout=20) as resp:
+                if resp.status != 200:
+                    print(f"[subdl] Download failed: HTTP {resp.status} for {url}")
+                    return None
+                data = await resp.read()
+
+        with open(temp_path, "wb") as f:
+            f.write(data)
+
+        # Decide format: zip -> extract; otherwise treat as raw subtitle text
+        is_zip = (
+            filename.lower().endswith(".zip")
+            or url.lower().endswith(".zip")
+            or zipfile.is_zipfile(temp_path)
+        )
+
+        if is_zip:
+            try:
+                with tempfile.TemporaryDirectory() as extract_dir:
+                    sub_files = _extract_all_recursive(temp_path, extract_dir)
+                    if sub_files:
+                        chosen_name, norm_text = _find_best_file_in_archive_tree(
+                            sub_files, extract_dir, target_title, target_filename
+                        )
+                        if chosen_name and norm_text:
+                            print(f"[subdl] Extracted '{chosen_name}' from '{filename}'")
+                            with open(cache_path, "w", encoding="utf-8") as f:
+                                f.write(norm_text)
+                            os.remove(temp_path)
+                            return cache_path
+                    print(f"[subdl] No subtitle found in zip '{filename}'")
+            except Exception as ze:
+                print(f"[subdl] Zip extract error for '{filename}': {ze}")
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return None
+
+        else:
+            # Raw .srt / .vtt / .ass
+            with open(temp_path, "rb") as f:
+                raw = f.read()
+            norm_text = _normalize_subtitle_text(raw, filename)
+            with open(cache_path, "w", encoding="utf-8") as f:
+                f.write(norm_text)
+            os.remove(temp_path)
+            print(f"[subdl] Cached subtitle '{filename}' for msg_id={msg_id}")
+            return cache_path
+
+    except Exception as e:
+        print(f"[subdl] Download error for '{filename}': {e}")
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return None
+
+
 # ── Yify online fallback ───────────────────────────────────────────────────────
 
 async def fetch_from_yify(msg_id: int, imdb_id: str) -> str | None:
@@ -891,6 +1068,7 @@ async def list_subtitle_options(msg_id: int, title: str, filename: str) -> dict:
         video = _cache._cache_meta.get(msg_id, {})
         pm = _cache._poster_mem.get(video.get("album", ""), {})
         imdb_id = pm.get("meta", {}).get("imdb_id")
+        tmdb_id = pm.get("meta", {}).get("tmdb_id")
         if imdb_id:
             options.append({
                 "id": None,
@@ -903,7 +1081,34 @@ async def list_subtitle_options(msg_id: int, title: str, filename: str) -> dict:
                 "episode": v_e,
             })
     except Exception:
-        pass
+        imdb_id = None
+        tmdb_id = None
+
+    # Online Subdl Options
+    try:
+        if _cfg.SUBDL_API_KEY:
+            subdl_results = await search_subdl(
+                title=title,
+                season=v_s,
+                episode=v_e,
+                imdb_id=imdb_id,
+                tmdb_id=tmdb_id,
+            )
+            for sub in subdl_results:
+                options.append({
+                    "id": sub["id"],
+                    "filename": sub["filename"],
+                    "score": sub["score"],
+                    "source": "subdl",
+                    "url": sub["url"],
+                    "language": sub.get("language", "EN"),
+                    "hi": sub.get("hi", False),
+                    "ext": sub["ext"],
+                    "season": v_s,
+                    "episode": v_e,
+                })
+    except Exception as e:
+        print(f"[subtitles] Subdl options error: {e}")
 
     return {
         "ok": True,
@@ -916,7 +1121,11 @@ async def list_subtitle_options(msg_id: int, title: str, filename: str) -> dict:
 
 
 async def apply_subtitle_option(
-    msg_id: int, sub_msg_id: int | None, filename: str, source: str = "telegram"
+    msg_id: int,
+    sub_msg_id: int | None,
+    filename: str,
+    source: str = "telegram",
+    url: str = "",
 ) -> str | None:
     """Download and set the specific chosen subtitle for this video."""
     import cache as _cache
@@ -935,6 +1144,17 @@ async def apply_subtitle_option(
 
     title = video.get("title", "")
     target_filename = video.get("filename", "")
+
+    if source == "subdl":
+        if not url:
+            return None
+        return await download_subdl_option(
+            msg_id=msg_id,
+            url=url,
+            filename=filename,
+            target_title=title,
+            target_filename=target_filename,
+        )
 
     if source == "yify":
         pm = _cache._poster_mem.get(video.get("album", ""), {})
