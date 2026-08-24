@@ -865,6 +865,12 @@ async def route_delete_album(req: web.Request):
 async def route_fetch(req):
     try:
         data = await get_videos(force=True)
+        # Also trigger a full subtitle index rebuild in the background
+        try:
+            from subtitles import build_subtitle_index
+            asyncio.ensure_future(build_subtitle_index(incremental=False))
+        except Exception:
+            pass
         return web.json_response({"ok": True, "count": len(data)})
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)

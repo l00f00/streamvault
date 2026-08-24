@@ -337,7 +337,31 @@ async def _main():
 
     _spawn_bg(_cache_stats_loop(), "streamvault-cache-stats")
 
-    # ── Run forever with graceful shutdown ─────────────────────────────────────
+    # ── Background subtitle channel index ─────────────────────────────────────
+    async def _subtitle_index_task():
+        """Run an incremental subtitle channel scan shortly after startup,
+        then recheck every 6 hours so new uploads are discovered automatically.
+        The index is persistent (SQLite) so subsequent scans are very fast.
+        """
+        # Give the main fetch/cache a 30-second head start first
+        await asyncio.sleep(30)
+        try:
+            from subtitles import build_subtitle_index
+            await build_subtitle_index(incremental=True)
+        except Exception as e:
+            print(f"[subtitle_index] Startup scan failed: {e}")
+
+        while True:
+            await asyncio.sleep(6 * 3600)       # Reindex every 6 hours
+            try:
+                from subtitles import build_subtitle_index
+                await build_subtitle_index(incremental=True)
+            except Exception as e:
+                print(f"[subtitle_index] Periodic scan failed: {e}")
+
+    _spawn_bg(_subtitle_index_task(), "streamvault-subtitle-index")
+
+
     try:
         await asyncio.Event().wait()
     finally:

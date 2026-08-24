@@ -63,6 +63,7 @@ streambot.session-journal
 hls_cache/
 video_cache/
 vlc_cache/
+.cache/
 imdbcache.json
 tg_albums.json
 tg_cache.json
