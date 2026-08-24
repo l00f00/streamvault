@@ -694,34 +694,43 @@ async def search_subsource(
             if not sub_id:
                 continue
 
-            # Check release info or commentary for descriptive filename
             rel_info = sub.get("releaseInfo", [])
-            display_name = (
-                rel_info[0] if (isinstance(rel_info, list) and rel_info)
-                else (sub.get("commentary") or f"SubSource_{sub_id}")
-            )
-            # Remove line breaks from commentary if used
-            display_name = display_name.split("\n")[0].strip()
+            lang = sub.get("language", "English")
+            hi = bool(sub.get("hearingImpaired", False))
+            dl_url = f"{_SUBSOURCE_BASE}/subtitles/{sub_id}/download"
 
-            sub_season, sub_ep = extract_season_episode(display_name)
-            # If searching for TV show episode, filter by episode if available
-            if episode is not None and sub_ep is not None and sub_ep != episode:
-                continue
-            if season is not None and sub_season is not None and sub_season != season:
-                continue
+            # Deconstruct releaseInfo list into individual distinct choices
+            display_names = []
+            if isinstance(rel_info, list) and rel_info:
+                display_names = [str(r).strip() for r in rel_info if str(r).strip()]
+            
+            if not display_names:
+                comm = (sub.get("commentary") or "").split("\n")[0].strip()
+                display_names = [comm or f"SubSource_{sub_id}"]
 
-            results.append({
-                "id": str(sub_id),
-                "filename": display_name,
-                "url": f"{_SUBSOURCE_BASE}/subtitles/{sub_id}/download",
-                "language": sub.get("language", "English"),
-                "ext": "zip",
-                "hi": bool(sub.get("hearingImpaired", False)),
-                "score": 80.0,
-                "source": "subsource",
-                "season": sub_season,
-                "episode": sub_ep,
-            })
+            for idx, d_name in enumerate(display_names):
+                sub_season, sub_ep = extract_season_episode(d_name)
+                # If searching for TV show episode, filter by episode if available
+                if episode is not None and sub_ep is not None and sub_ep != episode:
+                    continue
+                if season is not None and sub_season is not None and sub_season != season:
+                    continue
+
+                # Clean display name
+                clean_name = d_name if d_name.lower().endswith(".srt") else f"{d_name}.srt"
+
+                results.append({
+                    "id": f"{sub_id}_{idx}" if len(display_names) > 1 else str(sub_id),
+                    "filename": clean_name,
+                    "url": dl_url,
+                    "language": lang,
+                    "ext": "srt",
+                    "hi": hi,
+                    "score": 80.0,
+                    "source": "subsource",
+                    "season": sub_season,
+                    "episode": sub_ep,
+                })
 
         print(f"[subsource] Found {len(results)} subtitle(s) for '{title}'")
         return results
