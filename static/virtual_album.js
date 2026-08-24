@@ -35,6 +35,8 @@
   var COLS = 4;
   var GAP = 14;
   var CARD_H = 300;
+  // video-body breakdown: title 51 + meta 22 + play-row 42 + gaps 15 + padding 28 ≈ 158px
+  var _BODY_H = 158;
 
   // ── Cached layout (never read inside scroll RAF) ────────────────────────────
   var _gridTop = 0;
@@ -323,13 +325,6 @@
 
   // ── Card height — computed from known CSS values, no DOM probe needed ─────────
   // art: 16/9 * _colW
-  // body: padding-top 12 + padding-bottom 16 = 28
-  //       video-name min-height: 0.85rem * 1.4 * 3 ≈ 51px (at 16px root)
-  //       video-meta-row: ~22px
-  //       gap between elements: 3 * 5 = 15px
-  //       play-btn-row: padding-top 10 + height 32 = 42px
-  // total body ≈ 28 + 51 + 22 + 15 + 42 = 158px
-  var _BODY_H = 158;
   var _probedCols = -1; // kept for API compat with onResize reset
   function _probe() {
     // No-op: height is computed deterministically in _recacheLayout
