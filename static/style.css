@@ -228,7 +228,7 @@ body{padding-top:60px;}
 .video-card:hover .play-circle{transform:scale(1);box-shadow:0 0 28px rgba(245,197,24,.4);}
 .play-circle svg{fill:#000;width:16px;height:16px;margin-left:3px;}
 .dur-badge{position:absolute;bottom:7px;right:7px;background:rgba(0,0,0,.9);color:var(--text);font-size:.6rem;font-weight:600;padding:2px 6px;border-radius:5px;letter-spacing:.02em;z-index:3;}
-.resume-progress-bar{position:absolute;bottom:0;left:0;height:4px;width:100%;background:rgba(255,255,255,0.18);z-index:3;}
+.resume-progress-bar{position:absolute;bottom:0;left:0;height:4px;width:100%;background:rgba(255,255,255,0.18);z-index:3;overflow:hidden;pointer-events:none;}
 .resume-progress-fill{height:100%;background:var(--accent);transition:width .2s;}
 
 /* ── Top badge rows (flex containers to prevent any overlapping) ── */

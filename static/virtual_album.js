@@ -98,20 +98,21 @@
     var epb = ep ? '<span class="ep-badge">' + ep + "</span>" : "";
     var subBadge = v.has_sub ? '<span class="ep-badge cc-badge" title="Choose Subtitle" onclick="event.stopPropagation();openSubChooser(' + v.id + ')">CC</span>' : "";
     var leftBadgeRow = (epb || subBadge) ? '<div class="badge-row-left">' + epb + subBadge + '</div>' : "";
-    var resumeHtml = "";
+    var resumeBadge = "";
+    var progressBar = "";
     if (v.resume) {
       var pos = v.resume.pos || 0;
       var total = v.resume.dur || 0;
       var isFinished = total > 0 && pos >= total - 30;
       if (isFinished) {
-        resumeHtml = '<span class="watched-badge">✓ Watched</span>';
+        resumeBadge = '<span class="watched-badge">✓ Watched</span>';
       } else if (pos > 5) {
         var pct = total > 0 ? Math.min(100, Math.max(0, (pos / total) * 100)) : 0;
-        resumeHtml = '<span class="unfinished-badge">● ' + Math.round(pct) + '%</span>';
-        resumeHtml += '<div class="resume-progress-bar"><div class="resume-progress-fill" style="width:' + pct + '%"></div></div>';
+        resumeBadge = '<span class="unfinished-badge">● ' + Math.round(pct) + '%</span>';
+        progressBar = '<div class="resume-progress-bar"><div class="resume-progress-fill" style="width:' + pct + '%"></div></div>';
       }
     }
-    var rightBadgeRow = resumeHtml ? '<div class="badge-row-right">' + resumeHtml + '</div>' : "";
+    var rightBadgeRow = resumeBadge ? '<div class="badge-row-right">' + resumeBadge + '</div>' : "";
     var meta = "";
     if (v.quality)
       meta += '<span class="video-quality">' + v.quality + "</span>";
@@ -146,6 +147,7 @@
       dur +
       leftBadgeRow +
       rightBadgeRow +
+      progressBar +
       "</div>" +
       '<div class="video-body"><div class="video-name">' +
       displayName +
