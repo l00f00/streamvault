@@ -98,41 +98,81 @@ def _set_last_indexed_id(conn: sqlite3.Connection, msg_id: int) -> None:
 # ── Season / Episode extraction ────────────────────────────────────────────────
 
 def extract_season_episode(text: str) -> tuple[int | None, int | None]:
-    """Extract Season and Episode numbers from a string.
+    """Extract Season and Episode numbers from a string or file path.
     Returns (season, episode) or (None, None).
-    Handles: S02E04, 2x04, Season 2 Episode 4, Ep 4, Part 4, etc.
+    Handles:
+      - S02E04, S2 E4, s01e07, 2x04, 01x07
+      - Season 2 Episode 4, Season 1/07.srt, S02/04.srt
+      - Standalone episode tags: Ep 4, Episode 07, E07, Part 4, Pt 4
+      - 3/4-digit codes: 107 (S1E07), 215 (S2E15), H2O_107.srt
+      - Leading/bracketed episode numbers: 07.srt, 07 - Title.srt, [07], (07)
+      - Trailing episode numbers: Title - 07.srt
     """
     if not text:
         return None, None
-    # Normalize delimiters so word boundaries work reliably
-    norm = re.sub(r"[._\-+\[\]()]", " ", text)
 
-    # S01E04, S1 E4, S01  E04
+    # Replace path separators so directories count as context (e.g. "Season 1/07.srt")
+    path_norm = text.replace("\\", "/").strip()
+
+    # 1. Season folder + filename: "Season 1/07.srt" or "S02/04.srt"
+    m = re.search(r"(?i)(?:Season|S)\s*(\d{1,2})[/\-_ ]+.*?(\d{1,3})(?:\.\w+)?$", path_norm)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+
+    # Normalize delimiters for word boundary matching
+    norm = re.sub(r"[._\-+\[\]()]", " ", path_norm)
+
+    # 2. Standard S01E04, S1 E4, S01  E04
     m = re.search(r"(?i)\bS(\d{1,2})\s*E(\d{1,3})\b", norm)
     if m:
         return int(m.group(1)), int(m.group(2))
 
-    # 1x04, 01x04
+    # 3. 1x04, 01x04
     m = re.search(r"(?i)\b(\d{1,2})\s*x\s*(\d{1,3})\b", norm)
     if m:
         return int(m.group(1)), int(m.group(2))
 
-    # Season 1 Episode 4 / Season 01 Ep 4
+    # 4. Season 1 Episode 4 / Season 01 Ep 4
     m = re.search(r"(?i)\bSeason\s*(\d{1,2})\s*.*?Ep(?:isode)?\s*(\d{1,3})\b", norm)
     if m:
         return int(m.group(1)), int(m.group(2))
 
-    # Standalone: Episode 4 / Ep. 4 / E04
+    # 5. Season only with trailing episode: "Season 1 ... 07"
+    m = re.search(r"(?i)\bSeason\s*(\d{1,2})\b.*?(\d{1,3})\s*$", norm)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+
+    # 6. Standalone: Episode 4 / Ep. 4 / E04
     m = re.search(r"(?i)\b(?:Ep(?:isode)?|E)\s*(\d{1,3})\b", norm)
     if m:
         return None, int(m.group(1))
 
-    # Part 4 / Pt 4
+    # 7. Part 4 / Pt 4
     m = re.search(r"(?i)\b(?:Part|Pt)\s*(\d{1,3})\b", norm)
     if m:
         return None, int(m.group(1))
 
+    # 8. 3-digit season/episode: e.g. "107" -> Season 1, Episode 7; "214" -> Season 2, Episode 14
+    m = re.search(r"\b([1-9])(\d{2})\b", norm)
+    if m:
+        num = int(m.group(0))
+        if num not in {720, 480, 576, 360, 240, 108} and not (1900 <= num <= 2099):
+            return int(m.group(1)), int(m.group(2))
+
+    # 9. Bracketed or isolated episode number: "[07]", "(07)", "^07.srt", "07 - Title.srt"
+    base = os.path.basename(path_norm)
+    base_no_ext = os.path.splitext(base)[0].strip()
+    m = re.search(r"^(?:\[|\()?(\d{1,3})(?:\]|\))?(?:\s*[-_ ]|\s*$)", base_no_ext)
+    if m:
+        return None, int(m.group(1))
+
+    # 10. Trailing episode number: e.g. "Show Title 07.srt", "Show - 07.srt"
+    m = re.search(r"(?:^|[-_ ])0*(\d{1,3})\s*$", base_no_ext)
+    if m:
+        return None, int(m.group(1))
+
     return None, None
+
 
 
 # ── Text tokenization ──────────────────────────────────────────────────────────
@@ -406,6 +446,34 @@ async def fetch_from_yify(msg_id: int, imdb_id: str) -> str | None:
 
 # ── Download & cache a subtitle message ───────────────────────────────────────
 
+# ── Subtitle text normalization (UTF-8, UTF-16, Latin-1, CP1252, VTT) ─────────
+
+def _normalize_subtitle_text(raw_bytes: bytes, filename: str) -> str:
+    """Decode raw subtitle bytes across encodings (UTF-8-BOM, UTF-16, Latin-1, CP1252)
+    and return a clean UTF-8 string with WebVTT headers converted to SRT if needed."""
+    if not raw_bytes:
+        return ""
+    text = ""
+    for enc in ("utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "cp1252", "latin-1", "utf-8"):
+        try:
+            text = raw_bytes.decode(enc)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    if not text:
+        text = raw_bytes.decode("utf-8", errors="ignore")
+
+    # Clean WebVTT header if present
+    if filename.lower().endswith(".vtt") or text.startswith("WEBVTT"):
+        text = re.sub(r"^WEBVTT[^\n]*\n", "", text)
+        # Convert period timestamps (00:00:01.000) to comma timestamps (00:00:01,000)
+        text = re.sub(r"(\d{2}:\d{2}:\d{2})\.(\d{3})", r"\1,\2", text)
+
+    return text.strip()
+
+
+# ── Download & cache a subtitle message ───────────────────────────────────────
+
 def _find_best_file_in_zip(
     z: zipfile.ZipFile, target_title: str, target_filename: str
 ) -> tuple[str | None, bytes | None]:
@@ -414,20 +482,32 @@ def _find_best_file_in_zip(
         n for n in z.namelist()
         if not n.startswith("__MACOSX")
         and not os.path.basename(n).startswith("._")
+        and not n.endswith("/")
         and os.path.splitext(n)[1].lower() in {".srt", ".vtt", ".ass", ".sub"}
     ]
     if not candidates:
         return None, None
 
+    # Single subtitle in zip: immediate direct match
+    if len(candidates) == 1:
+        return candidates[0], z.read(candidates[0])
+
     v_s, v_e = extract_season_episode(f"{target_title} {target_filename}")
 
     scored: list[tuple[float, str]] = []
     for name in candidates:
-        base = os.path.basename(name)
-        sc = calculate_match_score(target_title, target_filename, base)
+        # Pass internal relative path to preserve directory context (e.g. "Season 1/07.srt")
+        sc = calculate_match_score(target_title, target_filename, name)
+
+        # Bonus for exact episode match
+        s_s, s_e = extract_season_episode(name)
+        if v_e is not None and s_e is not None and v_e == s_e:
+            sc += 100.0
+            if v_s is not None and s_s is not None and v_s == s_s:
+                sc += 50.0
 
         # Bonus for English indicators inside the zip
-        if any(w in base.lower() for w in ["eng", "english", ".en."]):
+        if any(w in name.lower() for w in ["eng", "english", ".en."]):
             sc += 15.0
         scored.append((sc, name))
 
@@ -461,9 +541,14 @@ async def _download_subtitle_msg(
 
         await client.download_media(sub_msg, file=temp_path)
 
-        ext = os.path.splitext(filename)[1].lower()
+        if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:
+            print(f"[subtitles] Downloaded file is empty for sub_msg_id={sub_msg_id}")
+            return None
 
-        if ext == ".zip":
+        ext = os.path.splitext(filename)[1].lower()
+        is_zip = ext == ".zip" or zipfile.is_zipfile(temp_path)
+
+        if is_zip:
             try:
                 with zipfile.ZipFile(temp_path, "r") as z:
                     chosen_name, content = _find_best_file_in_zip(
@@ -473,19 +558,15 @@ async def _download_subtitle_msg(
                         print(
                             f"[subtitles] Extracted '{chosen_name}' from zip '{filename}' for '{target_title}'"
                         )
-                        # If the internal file is a WebVTT, clean it
-                        if chosen_name.lower().endswith(".vtt"):
-                            text_content = content.decode("utf-8", errors="ignore")
-                            text_content = re.sub(r"^WEBVTT\s*\n", "", text_content)
-                            with open(cache_path, "w", encoding="utf-8") as f:
-                                f.write(text_content)
-                        else:
-                            with open(cache_path, "wb") as f:
-                                f.write(content)
+                        norm_text = _normalize_subtitle_text(content, chosen_name)
+                        with open(cache_path, "w", encoding="utf-8") as f:
+                            f.write(norm_text)
 
                         if os.path.exists(temp_path):
                             os.remove(temp_path)
                         return cache_path
+                    else:
+                        print(f"[subtitles] No suitable subtitle file found inside zip '{filename}'")
             except Exception as ze:
                 print(f"[subtitles] Zip extract failed for '{filename}': {ze}")
 
@@ -493,20 +574,23 @@ async def _download_subtitle_msg(
                 os.remove(temp_path)
             return None
 
-        elif ext == ".vtt":
-            with open(temp_path, "r", encoding="utf-8", errors="ignore") as f:
-                content_str = f.read()
-            content_str = re.sub(r"^WEBVTT\s*\n", "", content_str)
-            with open(cache_path, "w", encoding="utf-8") as f:
-                f.write(content_str)
-            os.remove(temp_path)
-            return cache_path
+        else:
+            # Single .srt / .vtt / .ass / .sub file
+            try:
+                with open(temp_path, "rb") as f:
+                    raw = f.read()
+                norm_text = _normalize_subtitle_text(raw, filename)
+                with open(cache_path, "w", encoding="utf-8") as f:
+                    f.write(norm_text)
 
-        else:  # .srt, .ass, .sub
-            if os.path.exists(cache_path):
-                os.remove(cache_path)
-            os.rename(temp_path, cache_path)
-            return cache_path
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                return cache_path
+            except Exception as fe:
+                print(f"[subtitles] Error processing single sub '{filename}': {fe}")
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                return None
 
     except Exception as e:
         print(f"[subtitles] Download error sub_msg_id={sub_msg_id}: {e}")
@@ -664,7 +748,19 @@ async def apply_subtitle_option(
 ) -> str | None:
     """Download and set the specific chosen subtitle for this video."""
     import cache as _cache
-    video = _cache._cache_meta.get(msg_id, {})
+    video = _cache._cache_meta.get(msg_id) or _cache._cache_meta.get(str(msg_id)) or {}
+    if not video:
+        try:
+            conn = _cache._fts_init()
+            row = conn.execute(
+                "SELECT title, filename, album FROM videos_plain WHERE message_id = ?",
+                (msg_id,),
+            ).fetchone()
+            if row:
+                video = {"title": row[0] or "", "filename": row[1] or "", "album": row[2] or ""}
+        except Exception:
+            pass
+
     title = video.get("title", "")
     target_filename = video.get("filename", "")
 

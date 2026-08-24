@@ -1284,7 +1284,7 @@ function _applySub(msgId, subMsgId, filename, source, btn){{
     body:JSON.stringify({{
       msg_id: msgId,
       sub_msg_id: subMsgId,
-      filename: decodeURIComponent(filename),
+      filename: filename,
       source: source
     }})
   }})
