@@ -94,20 +94,22 @@
         String(m[2]).padStart(2, "0");
     var dur = v.dur ? '<span class="dur-badge">' + v.dur + "</span>" : "";
     var epb = ep ? '<span class="ep-badge">' + ep + "</span>" : "";
-    var subBadge = v.has_sub ? '<span class="ep-badge" style="background:#2ebd59;color:#fff;font-weight:800;margin-left:4px;">CC</span>' : "";
+    var subBadge = v.has_sub ? '<span class="ep-badge cc-badge" title="Choose Subtitle" onclick="event.stopPropagation();openSubChooser(' + v.id + ')">CC</span>' : "";
+    var leftBadgeRow = (epb || subBadge) ? '<div class="badge-row-left">' + epb + subBadge + '</div>' : "";
     var resumeHtml = "";
     if (v.resume) {
       var pos = v.resume.pos || 0;
       var total = v.resume.dur || 0;
       var isFinished = total > 0 && pos >= total - 30;
       if (isFinished) {
-        resumeHtml += '<span class="watched-badge">✓ Watched</span>';
+        resumeHtml = '<span class="watched-badge">✓ Watched</span>';
       } else if (pos > 5) {
         var pct = total > 0 ? Math.min(100, Math.max(0, (pos / total) * 100)) : 0;
-        resumeHtml += '<span class="unfinished-badge">● ' + Math.round(pct) + '%</span>';
+        resumeHtml = '<span class="unfinished-badge">● ' + Math.round(pct) + '%</span>';
         resumeHtml += '<div class="resume-progress-bar"><div class="resume-progress-fill" style="width:' + pct + '%"></div></div>';
       }
     }
+    var rightBadgeRow = resumeHtml ? '<div class="badge-row-right">' + resumeHtml + '</div>' : "";
     var meta = "";
     if (v.quality)
       meta += '<span class="video-quality">' + v.quality + "</span>";
@@ -140,9 +142,8 @@
       '<div class="art-vignette"></div>' +
       '<div class="play-overlay"><div class="play-circle"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z"/></svg></div></div>' +
       dur +
-      epb +
-      subBadge +
-      resumeHtml +
+      leftBadgeRow +
+      rightBadgeRow +
       "</div>" +
       '<div class="video-body"><div class="video-name">' +
       displayName +
@@ -159,7 +160,7 @@
       "',this)\">" +
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="13" height="13"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>' +
       "</button>" +
-      '<button class="play-btn-copy" title="Fetch English Subtitles" onclick="event.stopPropagation();fetchSub(' +
+      '<button class="play-btn-copy" title="Choose Subtitles" onclick="event.stopPropagation();openSubChooser(' +
       v.id +
       ',this)">' +
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="13" height="13"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M8 9h8"></path><path d="M8 13h6"></path></svg>' +

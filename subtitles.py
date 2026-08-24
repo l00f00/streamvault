@@ -534,3 +534,88 @@ async def fetch_english_subtitle(msg_id: int, title: str, filename: str) -> str 
         print(f"[subtitles] Yify fallback error: {e}")
 
     return None
+
+
+async def list_subtitle_options(msg_id: int, title: str, filename: str) -> dict:
+    """Return all available subtitle options from the local channel index and online sources."""
+    v_s, v_e = extract_season_episode(f"{title} {filename}")
+    candidates = query_subtitle_index(title, filename, season=v_s, episode=v_e)
+
+    if not candidates:
+        try:
+            await build_subtitle_index(incremental=True)
+            candidates = query_subtitle_index(title, filename, season=v_s, episode=v_e)
+        except Exception:
+            pass
+
+    current_sub_path = os.path.join(SUB_DIR, f"{msg_id}_en.srt")
+    has_active_sub = os.path.exists(current_sub_path)
+
+    options = []
+    for sub_msg_id, sub_filename, score in candidates:
+        s, e = extract_season_episode(sub_filename)
+        options.append({
+            "id": sub_msg_id,
+            "filename": sub_filename,
+            "score": round(score, 1),
+            "source": "telegram",
+            "is_zip": sub_filename.lower().endswith(".zip"),
+            "ext": os.path.splitext(sub_filename)[1].lower().lstrip("."),
+            "season": s,
+            "episode": e,
+        })
+
+    # Online Yify Option
+    try:
+        import cache as _cache
+        video = _cache._cache_meta.get(msg_id, {})
+        pm = _cache._poster_mem.get(video.get("album", ""), {})
+        imdb_id = pm.get("meta", {}).get("imdb_id")
+        if imdb_id:
+            options.append({
+                "id": None,
+                "filename": f"Yify Subtitles (IMDb {imdb_id})",
+                "score": 85.0,
+                "source": "yify",
+                "imdb_id": imdb_id,
+                "ext": "srt",
+                "season": v_s,
+                "episode": v_e,
+            })
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "msg_id": msg_id,
+        "title": title,
+        "filename": filename,
+        "has_active_sub": has_active_sub,
+        "options": options,
+    }
+
+
+async def apply_subtitle_option(
+    msg_id: int, sub_msg_id: int | None, filename: str, source: str = "telegram"
+) -> str | None:
+    """Download and set the specific chosen subtitle for this video."""
+    if source == "yify":
+        import cache as _cache
+        video = _cache._cache_meta.get(msg_id, {})
+        pm = _cache._poster_mem.get(video.get("album", ""), {})
+        imdb_id = pm.get("meta", {}).get("imdb_id")
+        if imdb_id:
+            return await fetch_from_yify(msg_id, imdb_id)
+        return None
+
+    # Telegram source
+    from streaming import _get_entity
+    client = _cfg.client
+    if not client or not sub_msg_id:
+        return None
+    entity = await _get_entity()
+    if not entity:
+        return None
+
+    return await _download_subtitle_msg(client, entity, msg_id, sub_msg_id, filename)
+

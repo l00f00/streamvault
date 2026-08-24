@@ -482,12 +482,25 @@ document.addEventListener('click',function(e){{
         // 1. Grid Cards (Album View / Feeds)
         var art = el.querySelector('.video-art');
         if(art){{
+          var rightRow = art.querySelector('.badge-row-right');
+          if(!rightRow){{
+            rightRow = document.createElement('div');
+            rightRow.className = 'badge-row-right';
+            art.appendChild(rightRow);
+          }}
+          var wb = rightRow.querySelector('.watched-badge');
+          if(wb) wb.remove();
+          var b = rightRow.querySelector('.unfinished-badge');
+          if(!b){{
+            b = document.createElement('span');
+            b.className = 'unfinished-badge';
+            rightRow.appendChild(b);
+          }}
+          b.textContent = '● '+Math.round(pct)+'%';
+          b.style.color = 'var(--accent,#f5c518)';
+
           var fill = art.querySelector('.resume-progress-fill');
           if(!fill){{
-            var badge = document.createElement('span');
-            badge.className = 'unfinished-badge';
-            art.appendChild(badge);
-
             var bar = document.createElement('div');
             bar.className = 'resume-progress-bar';
             fill = document.createElement('div');
@@ -496,11 +509,6 @@ document.addEventListener('click',function(e){{
             art.appendChild(bar);
           }}
           fill.style.width = pct+'%';
-          var b = art.querySelector('.unfinished-badge');
-          if(b){{
-            b.textContent = '● '+Math.round(pct)+'%';
-            b.style.color = 'var(--accent,#f5c518)';
-          }}
         }}
 
         // 2. History Sidebar Items
@@ -1187,38 +1195,98 @@ function copyUrl(url,btn){{
     setTimeout(function(){{btn.innerHTML=orig;}},1500);
   }}).catch(function(){{}});
 }}
-function fetchSub(id,btn){{
-  if(btn){{btn.disabled=true;btn.dataset.origHtml=btn.innerHTML;btn.innerHTML='<svg class="sv-spin-ico" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="animation:sv-spin .7s linear infinite"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>';}}
-  fetch('/api/subtitles/fetch',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{msg_id:id}})}})
-    .then(function(r){{return r.json();}})
-    .then(function(d){{
-      if(d.ok){{
-        _svShowVlcPill('\u2713 Subtitles loaded!',true);
-        if(window._VDATA&&Array.isArray(window._VDATA)){{
-          var item=window._VDATA.find(function(x){{return x.id==id;}});
-          if(item)item.has_sub=true;
-        }}
-        var card=document.querySelector('[data-mid="'+id+'"]');
-        if(card){{
-          var art=card.querySelector('.video-art');
-          if(art&&!art.querySelector('.ep-badge[style*="background:#2ebd59"]')){{
-            var epb=art.querySelector('.ep-badge');
-            var badge=document.createElement('span');
-            badge.className='ep-badge';
-            badge.style.cssText='background:#2ebd59;color:#fff;font-weight:800;margin-left:4px;';
-            badge.textContent='CC';
-            if(epb)epb.insertAdjacentElement('afterend',badge); else art.appendChild(badge);
-          }}
-        }}
-      }}else{{
-        _svShowVlcPill('\u26a0 '+(d.error||'No subtitles found'),false);
-      }}
-      if(btn){{btn.disabled=false;btn.innerHTML=btn.dataset.origHtml;}}
-    }})
-    .catch(function(){{
-      _svShowVlcPill('\u26a0 Subtitle search failed',false);
-      if(btn){{btn.disabled=false;btn.innerHTML=btn.dataset.origHtml;}}
+function openSubChooser(id, btn){{
+  if(btn){{btn.dataset.origHtml=btn.innerHTML;btn.innerHTML='<svg class="sv-spin-ico" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="animation:sv-spin .7s linear infinite"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>';}}
+  openModal('<div style="text-align:center;padding:28px 0;"><svg class="sv-spin-ico" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" style="animation:sv-spin .7s linear infinite"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg><div style="margin-top:14px;font-size:.85rem;font-weight:600;color:#ccc">Scanning channel & online subtitles...</div></div>');
+
+  fetch('/api/subtitles/list',{{
+    method:'POST',
+    headers:{{'Content-Type':'application/json'}},
+    body:JSON.stringify({{msg_id:id}})
+  }})
+  .then(function(r){{return r.json();}})
+  .then(function(d){{
+    if(btn){{btn.innerHTML=btn.dataset.origHtml;}}
+    if(!d.ok||!d.options||d.options.length===0){{
+      openModal('<h3 style="font-size:1rem;font-weight:700;margin-bottom:8px;color:#e8e8e8">No Subtitles Found</h3><p style="font-size:.8rem;color:#888;margin-bottom:20px;line-height:1.4">No matching subtitle files were found in the channel or online database for this video.</p><div style="text-align:right"><button class="sub-modal-select-btn" onclick="closeModal()">Close</button></div>');
+      return;
+    }}
+    var html = '<h3 style="font-size:1.05rem;font-weight:700;color:#e8e8e8;margin-bottom:4px">Select Subtitle</h3>';
+    html += '<div style="font-size:.76rem;color:#888;margin-bottom:14px;word-break:break-word">'+(d.title||d.filename||'')+'</div>';
+    html += '<div class="sub-modal-list">';
+    d.options.forEach(function(opt){{
+      var isTg = opt.source === 'telegram';
+      var tagClass = isTg ? 'tg' : 'yify';
+      var tagLabel = isTg ? 'Telegram' : 'Yify Online';
+      var scoreLabel = opt.score > 0 ? (Math.round(Math.min(100, opt.score)) + '% Match') : '';
+      var subIdStr = opt.id !== null && opt.id !== undefined ? opt.id : 'null';
+      html += '<div class="sub-modal-item" id="sub_opt_'+(opt.id||'yify')+'">';
+      html += '  <div style="flex:1;min-width:0">';
+      html += '    <div class="sub-modal-item-title">'+opt.filename+'</div>';
+      html += '    <div class="sub-modal-item-meta">';
+      html += '      <span class="sub-modal-tag '+tagClass+'">'+tagLabel+'</span>';
+      if(scoreLabel) html += '      <span class="sub-modal-tag match">'+scoreLabel+'</span>';
+      if(opt.ext) html += '      <span style="text-transform:uppercase;color:#555">.'+opt.ext+'</span>';
+      html += '    </div>';
+      html += '  </div>';
+      html += '  <button class="sub-modal-select-btn" onclick="_applySub('+id+','+subIdStr+',\''+encodeURIComponent(opt.filename)+'\',\''+opt.source+'\',this)">Use This Subtitle</button>';
+      html += '</div>';
     }});
+    html += '</div>';
+    openModal(html);
+  }})
+  .catch(function(){{
+    if(btn){{btn.innerHTML=btn.dataset.origHtml;}}
+    openModal('<h3 style="font-size:1rem;color:#f66;margin-bottom:8px">Error</h3><p style="font-size:.8rem;color:#aaa;margin-bottom:16px">Failed to load subtitles list.</p><div style="text-align:right"><button class="sub-modal-select-btn" onclick="closeModal()">Close</button></div>');
+  }});
+}}
+
+function _applySub(msgId, subMsgId, filename, source, btn){{
+  if(btn){{btn.disabled=true;btn.textContent='Applying...';}}
+  fetch('/api/subtitles/apply',{{
+    method:'POST',
+    headers:{{'Content-Type':'application/json'}},
+    body:JSON.stringify({{
+      msg_id: msgId,
+      sub_msg_id: subMsgId,
+      filename: decodeURIComponent(filename),
+      source: source
+    }})
+  }})
+  .then(function(r){{return r.json();}})
+  .then(function(d){{
+    if(d.ok){{
+      _svShowVlcPill('\u2713 Subtitle applied successfully!',true);
+      closeModal();
+      if(window._VDATA&&Array.isArray(window._VDATA)){{
+        var item=window._VDATA.find(function(x){{return x.id==msgId;}});
+        if(item) item.has_sub=true;
+      }}
+      var card=document.querySelector('[data-mid="'+msgId+'"]');
+      if(card){{
+        var leftRow=card.querySelector('.badge-row-left');
+        if(leftRow&&!leftRow.querySelector('.cc-badge')){{
+          var cc=document.createElement('span');
+          cc.className='ep-badge cc-badge';
+          cc.textContent='CC';
+          cc.title='Change Subtitle';
+          cc.onclick=function(ev){{ev.stopPropagation();openSubChooser(msgId);}};
+          leftRow.appendChild(cc);
+        }}
+      }}
+    }}else{{
+      _svShowVlcPill('\u26a0 '+(d.error||'Failed to apply subtitle'),false);
+      if(btn){{btn.disabled=false;btn.textContent='Use This Subtitle';}}
+    }}
+  }})
+  .catch(function(){{
+    _svShowVlcPill('\u26a0 Network error applying subtitle',false);
+    if(btn){{btn.disabled=false;btn.textContent='Use This Subtitle';}}
+  }});
+}}
+
+function fetchSub(id,btn){{
+  openSubChooser(id, btn);
 }}
 (function(){{
   fetch('/api/album_data/{encoded_album}')

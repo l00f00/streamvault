@@ -2979,6 +2979,45 @@ async def route_fetch_subtitle(req: web.Request):
         return web.json_response({"ok": False, "error": str(e)})
 
 
+async def route_list_subtitles(req: web.Request):
+    """POST /api/subtitles/list — return all candidate subtitles for selection."""
+    try:
+        j = await req.json()
+        msg_id = int(j.get("msg_id"))
+        import cache as _cache
+
+        meta = _cache._cache_meta.get(msg_id, {})
+        title = meta.get("title", "")
+        filename = meta.get("filename", "")
+        from subtitles import list_subtitle_options
+
+        data = await list_subtitle_options(msg_id, title, filename)
+        return web.json_response(data)
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+async def route_apply_subtitle(req: web.Request):
+    """POST /api/subtitles/apply — set and download the chosen subtitle file."""
+    try:
+        j = await req.json()
+        msg_id = int(j.get("msg_id"))
+        sub_msg_id = j.get("sub_msg_id")
+        if sub_msg_id is not None:
+            sub_msg_id = int(sub_msg_id)
+        filename = str(j.get("filename", ""))
+        source = str(j.get("source", "telegram"))
+        from subtitles import apply_subtitle_option
+
+        sub_path = await apply_subtitle_option(msg_id, sub_msg_id, filename, source=source)
+        if sub_path:
+            return web.json_response({"ok": True, "path": sub_path})
+        return web.json_response({"ok": False, "error": "Failed to download selected subtitle"})
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+
 # ── REFETCH MISSING THUMBS ────────────────────────────────────────────────────
 # ── APP FACTORY ───────────────────────────────────────────────────────────────
 def make_app():
@@ -3024,6 +3063,8 @@ def make_app():
     app.router.add_post("/api/history/record", route_history_record)
     app.router.add_get("/api/playback_status", route_playback_status)
     app.router.add_post("/api/subtitles/fetch", route_fetch_subtitle)
+    app.router.add_post("/api/subtitles/list", route_list_subtitles)
+    app.router.add_post("/api/subtitles/apply", route_apply_subtitle)
     app.router.add_post("/hls/{msg_id:\\d+}/start", route_hls_start)
     app.router.add_get("/hls/{msg_id:\\d+}/playlist.m3u8", route_hls_playlist)
     app.router.add_get("/hls/{msg_id:\\d+}/{seg_name}", route_hls_segment)
