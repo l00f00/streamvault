@@ -458,18 +458,21 @@
 
   // ── Search ──────────────────────────────────────────────────────────────────
   var _st = null;
-  document.getElementById("searchInput").addEventListener("input", function () {
-    var q = this.value.toLowerCase().trim();
-    clearTimeout(_st);
-    _st = setTimeout(function () {
-      rebuildFiltered(q);
-      resetPool();
-      window.scrollTo({ top: 0, behavior: "instant" });
-      _recacheLayout();
-      sentinel.style.height = totalH() + "px";
-      render();
-    }, 80);
-  });
+  var _sInput = document.getElementById("searchInput");
+  if (_sInput) {
+    _sInput.addEventListener("input", function () {
+      var q = this.value.toLowerCase().trim();
+      clearTimeout(_st);
+      _st = setTimeout(function () {
+        rebuildFiltered(q);
+        resetPool();
+        window.scrollTo({ top: 0, behavior: "instant" });
+        _recacheLayout();
+        sentinel.style.height = totalH() + "px";
+        render();
+      }, 80);
+    });
+  }
 
   // ── Scroll handler ──────────────────────────────────────────────────────────
   var _raf = false;
@@ -723,12 +726,10 @@
 
   // Called by the hero poster img onload to correct _gridTop after any
   // layout shift caused by the image expanding its container.
-  window._recacheGridTop = function () {
-    _recacheLayout();
-    render();
-  };
-
   grid.style.position = "relative";
   _recacheLayout();
   updateSortUI();
+  if (window._VDATA && Array.isArray(window._VDATA)) {
+    window._initVirtualGrid(window._VDATA);
+  }
 })();

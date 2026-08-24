@@ -733,8 +733,8 @@ def _render_index(albums, total):
   <div class="sec-row"><h2>Albums</h2><span class="pill">{len(albums)}</span><div class="divider"></div>
     <div style="display:flex;gap:6px;margin-left:auto;align-items:center;">
       <span style="font-size:0.7rem;color:var(--text3);font-weight:600;margin-right:2px;text-transform:uppercase;letter-spacing:0.5px;">Filter:</span>
-      <button class="alb-filter-btn"        id="fltAll"    onclick="_setFilter('all')">All</button>
-      <button class="alb-filter-btn active" id="fltSeries" onclick="_setFilter('series')">
+      <button class="alb-filter-btn active" id="fltAll"    onclick="_setFilter('all')">All</button>
+      <button class="alb-filter-btn"        id="fltSeries" onclick="_setFilter('series')">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
         Series
       </button>
@@ -808,7 +808,7 @@ def _render_index(albums, total):
   }}
   function _overscan(){{ return 2+Math.min(4,Math.floor(Math.abs(_vy)/0.4)); }}
   var _filtered = [];
-  var _activeFilter = (function(){{try{{return sessionStorage.getItem('sv_home_filter')||'series';}}catch(e){{return 'series';}}}})();
+  var _activeFilter = (function(){{try{{return sessionStorage.getItem('sv_home_filter')||'all';}}catch(e){{return 'all';}}}})();
   var _activeSort = (function(){{try{{return sessionStorage.getItem('sv_home_sort')||'date';}}catch(e){{return 'date';}}}})();
   function rowCount(){{ return Math.ceil(_filtered.length/COLS); }}
   function totalH(){{ return Math.max(0,rowCount()*(CARD_H+GAP)-GAP)+80; }}
