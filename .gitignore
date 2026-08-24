@@ -68,7 +68,8 @@ tg_albums.json
 tg_cache.json
 deleted_albums.json
 resume.json
-resume_positions.json
+resume_positions.json*
+*.migrated
 
 # Large temp / test files
 test_tmp.bin

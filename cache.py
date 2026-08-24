@@ -885,19 +885,15 @@ def _fill_imdb_gaps_sync(album_names: list | None = None) -> dict:
         key = name.strip().lower()
         existing = _imdb_cache_mem.get(key, {})
 
-        # Check if there are gaps to fill
-        has_gap = False
-        for field in ("poster", "year", "rating", "type", "plot"):
-            val = existing.get(field, "")
-            if not val or val == "N/A":
-                has_gap = True
-                break
-
-        if not has_gap and existing:
+        # Skip albums that already have details (poster, year, rating, plot) to protect manual edits or existing fetches
+        if existing and any(existing.get(f) for f in ("poster", "year", "rating", "plot")):
             skipped += 1
             continue
 
         try:
+            import time
+            time.sleep(1.0) # Safe rate limiting between batch requests
+
             if existing:
                 updated = fill_imdb_gaps(name, existing, tmdb_api_key=tmdb_key)
             else:
@@ -912,6 +908,13 @@ def _fill_imdb_gaps_sync(album_names: list | None = None) -> dict:
                         updated[field] = ""
                 _imdb_cache_mem[key] = updated
                 filled += 1
+
+                # Download and cache poster locally using the same logic as the single album update
+                from render import _cache_poster_sync
+                poster_remote = updated.get("poster") or ""
+                if poster_remote and not poster_remote.startswith("/"):
+                    _cache_poster_sync(name, poster_remote)
+
                 details.append(
                     {
                         "album": name,
@@ -991,6 +994,24 @@ async def _fetch_all_meta(album_names: list) -> dict:
             results[name] = v if isinstance(v, dict) else {}
     return results
 
+
+def resume_get_many(msg_ids: list[int]) -> dict:
+    """Return dictionary of resume states for given msg_ids.
+       Returns dict mapping msg_id -> {'pos': pos, 'dur': dur, 'updated_at': updated_at}
+    """
+    if not msg_ids:
+        return {}
+    try:
+        conn = _history_init()
+        placeholders = ",".join("?" for _ in msg_ids)
+        rows = conn.execute(
+            f"SELECT message_id, pos, dur, updated_at FROM resume_positions WHERE message_id IN ({placeholders})",
+            msg_ids,
+        ).fetchall()
+        return {r[0]: {"pos": r[1], "dur": r[2], "updated_at": r[3] or 0} for r in rows}
+    except Exception as e:
+        print(f"[resume] resume_get_many error: {e}")
+        return {}
 
 # ── RESUME POSITIONS ──────────────────────────────────────────────────────────
 def resume_get(msg_id: int) -> float:

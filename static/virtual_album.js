@@ -94,6 +94,20 @@
         String(m[2]).padStart(2, "0");
     var dur = v.dur ? '<span class="dur-badge">' + v.dur + "</span>" : "";
     var epb = ep ? '<span class="ep-badge">' + ep + "</span>" : "";
+    var subBadge = v.has_sub ? '<span class="ep-badge" style="background:#2ebd59;color:#fff;font-weight:800;margin-left:4px;">CC</span>' : "";
+    var resumeHtml = "";
+    if (v.resume) {
+      var pos = v.resume.pos || 0;
+      var total = v.resume.dur || 0;
+      var isFinished = total > 0 && pos >= total - 30;
+      if (isFinished) {
+        resumeHtml += '<span class="watched-badge">✓ Watched</span>';
+      } else if (pos > 5) {
+        var pct = total > 0 ? Math.min(100, Math.max(0, (pos / total) * 100)) : 0;
+        resumeHtml += '<span class="unfinished-badge">● ' + Math.round(pct) + '%</span>';
+        resumeHtml += '<div class="resume-progress-bar"><div class="resume-progress-fill" style="width:' + pct + '%"></div></div>';
+      }
+    }
     var meta = "";
     if (v.quality)
       meta += '<span class="video-quality">' + v.quality + "</span>";
@@ -127,6 +141,8 @@
       '<div class="play-overlay"><div class="play-circle"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z"/></svg></div></div>' +
       dur +
       epb +
+      subBadge +
+      resumeHtml +
       "</div>" +
       '<div class="video-body"><div class="video-name">' +
       displayName +
@@ -142,6 +158,11 @@
       v.vlc +
       "',this)\">" +
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="13" height="13"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>' +
+      "</button>" +
+      '<button class="play-btn-copy" title="Fetch English Subtitles" onclick="event.stopPropagation();fetchSub(' +
+      v.id +
+      ',this)">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="13" height="13"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M8 9h8"></path><path d="M8 13h6"></path></svg>' +
       "</button>" +
       "</div>" +
       "</div>"
@@ -350,6 +371,7 @@
       // Swap content
       slot.el.style.visibility = "hidden";
       slot.el.innerHTML = _getHtml(v.id);
+      slot.el.setAttribute("data-mid", v.id);
       slot.idx = i;
       _slotOf[i] = slot;
     }
@@ -618,21 +640,33 @@
 
     // Season tabs
     var seasons = [];
+    var lastWatchedVideo = null;
+    var maxUpdatedAt = 0;
     allVideos.forEach(function (v) {
       if (v.season && seasons.indexOf(v.season) < 0) seasons.push(v.season);
+      if (v.resume && v.resume.updated_at > maxUpdatedAt) {
+        maxUpdatedAt = v.resume.updated_at;
+        lastWatchedVideo = v;
+      }
     });
     seasons.sort(function (a, b) {
       return a - b;
     });
+    
+    var initialSeason = seasons[0] || 0;
+    if (lastWatchedVideo && lastWatchedVideo.season) {
+      initialSeason = lastWatchedVideo.season;
+    }
+    
     var tb = document.getElementById("seasonTabBar");
     if (tb && seasons.length > 1) {
       tb.style.display = "flex";
-      activeSeason = seasons[0];
+      activeSeason = initialSeason;
       var h = "";
       seasons.forEach(function (s) {
         h +=
           '<button class="season-tab' +
-          (s === seasons[0] ? " active" : "") +
+          (s === initialSeason ? " active" : "") +
           '" data-s="' +
           s +
           '" onclick="_albSetSeason(' +
@@ -642,6 +676,8 @@
           "</button>";
       });
       tb.innerHTML = h;
+    } else {
+      activeSeason = initialSeason;
     }
 
     rebuildFiltered(_q);
@@ -663,6 +699,25 @@
 
     sentinel.style.height = totalH() + "px";
     render();
+
+    if (lastWatchedVideo) {
+      var targetIdx = -1;
+      for (var i = 0; i < filtered.length; i++) {
+        if (filtered[i].id === lastWatchedVideo.id) {
+          targetIdx = i;
+          break;
+        }
+      }
+      if (targetIdx >= 0) {
+        // Delay slightly to allow DOM layout to stabilize
+        setTimeout(function() {
+          _recacheLayout();
+          var targetY = _gridTop + cardTop(targetIdx) - 100;
+          window.scrollTo({ top: targetY, behavior: "instant" });
+          render();
+        }, 100);
+      }
+    }
   };
 
   // Called by the hero poster img onload to correct _gridTop after any

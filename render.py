@@ -268,10 +268,12 @@ document.addEventListener('DOMContentLoaded', function() {
 })();
 (function(){var s=document.createElement('style');s.textContent='@keyframes sv-spin{to{transform:rotate(360deg)}}';document.head.appendChild(s);})();
 </script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" media="print" onload="this.media='all'">
-<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap"></noscript>
+
+<link rel="preload" href="/static/fonts/outfit-300.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="preload" href="/static/fonts/outfit-400.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="preload" href="/static/fonts/outfit-500.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="preload" href="/static/fonts/outfit-600.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="preload" href="/static/fonts/outfit-700.ttf" as="font" type="font/ttf" crossorigin>
 <link rel="stylesheet" href="/static/style.css"></head><body>"""
     )
 
@@ -465,6 +467,73 @@ document.addEventListener('click',function(e){{
   document.addEventListener('visibilitychange',function(){{if(document.visibilityState==='visible')_pollBell();}});
   function _clearBell(){{var b=document.getElementById('settingsBadge'),bm=document.getElementById('settingsBadgeMobile');if(b)b.style.display='none';if(bm)bm.style.display='none';fetch('/api/notifications/seen',{{method:'POST'}}).catch(function(){{}});}}
   ['navSettingsBtn','navSettingsMobile'].forEach(function(id){{var el=document.getElementById(id);if(el)el.addEventListener('click',_clearBell,{{passive:true}});}});
+
+  function _syncPlaybackStatus(){{
+    fetch('/api/playback_status').then(function(r){{return r.json();}}).then(function(d){{
+      if(!d||!d.ok||!d.active)return;
+      var act=d.active;
+      if(!act.msg_id||act.state==='stopped')return;
+      var mid=act.msg_id,pos=act.pos||0,dur=act.dur||0;
+      var pct=dur>0?Math.min(100,Math.max(0,(pos/dur)*100)):0;
+      var hrs=Math.floor(pos/3600),mins=Math.floor((pos%3600)/60),secs=Math.floor(pos%60);
+      var tStr=(hrs>0?hrs+':':'')+(mins<10&&hrs>0?'0':'')+mins+':'+(secs<10?'0':'')+secs;
+      var els=document.querySelectorAll('[data-mid="'+mid+'"]');
+      els.forEach(function(el){{
+        // 1. Grid Cards (Album View / Feeds)
+        var art = el.querySelector('.video-art');
+        if(art){{
+          var fill = art.querySelector('.resume-progress-fill');
+          if(!fill){{
+            var badge = document.createElement('span');
+            badge.className = 'unfinished-badge';
+            art.appendChild(badge);
+
+            var bar = document.createElement('div');
+            bar.className = 'resume-progress-bar';
+            fill = document.createElement('div');
+            fill.className = 'resume-progress-fill';
+            bar.appendChild(fill);
+            art.appendChild(bar);
+          }}
+          fill.style.width = pct+'%';
+          var b = art.querySelector('.unfinished-badge');
+          if(b){{
+            b.textContent = '● '+Math.round(pct)+'%';
+            b.style.color = 'var(--accent,#f5c518)';
+          }}
+        }}
+
+        // 2. History Sidebar Items
+        var thumb = el.querySelector('.history-item-thumb');
+        if(thumb){{
+          var fill = thumb.querySelector('.resume-progress-fill');
+          if(!fill){{
+            var progressDiv = document.createElement('div');
+            progressDiv.style.cssText = 'position:absolute;bottom:0;left:0;height:3px;background:var(--accent);';
+            progressDiv.className = 'resume-progress-fill';
+            thumb.appendChild(progressDiv);
+            fill = progressDiv;
+          }}
+          fill.style.width = pct+'%';
+          var meta = el.querySelector('.history-item-meta');
+          if(meta){{
+            var resumeText = meta.querySelector('span[style*="color:var(--accent)"]');
+            if(!resumeText){{
+              resumeText = document.createElement('span');
+              resumeText.style.cssText = 'color:var(--accent);font-weight:600;';
+              meta.appendChild(resumeText);
+            }}
+            resumeText.textContent = '▶ '+tStr+' ('+Math.round(pct)+'%)';
+          }}
+        }}
+      }});
+      if(window._VDATA&&Array.isArray(window._VDATA)){{
+        var item=window._VDATA.find(function(x){{return x.id==mid;}});
+        if(item){{item.resume={{pos:pos,dur:dur,updated_at:Date.now()/1000}};}}
+      }}
+    }}).catch(function(){{}});
+  }}
+  setInterval(_syncPlaybackStatus,2000);
 }})();
 var _historyLoaded=false;
 var _historyOffset=0;
@@ -537,7 +606,7 @@ function loadHistory(append){{
       var dur=h.duration?'<span>'+h.duration+'</span>':'';
       var qual=h.quality?'<span>'+h.quality+'</span>':'';
       var alb=h.album?'<a href="/album/'+encodeURIComponent(h.album)+'" style="color:var(--accent);text-decoration:none;">'+h.album+'</a>':'';
-      html+='<div class="history-item">'
+      html+='<div class="history-item" data-mid="'+h.message_id+'">'
         +'<div class="history-item-thumb" style="position:relative;">'+thumb+progressHtml+'</div>'
         +'<div class="history-item-info">'
         +'<div class="history-item-title">'+(h.title||'Untitled')+'</div>'
@@ -944,6 +1013,7 @@ def _render_index(albums, total):
     var id='srt'+l,el=document.getElementById(id);
     if(el)el.classList.toggle('active', (l==='Date'&&_activeSort==='date')||(l==='Alpha'&&_activeSort==='alpha'));
   }});
+  
   requestAnimationFrame(function(){{
     _recacheLayout();
     var vpRows=Math.ceil(window.innerHeight/CARD_H)+8,poolN=Math.min(ALBUM_DATA.length,vpRows*COLS);
@@ -1116,6 +1186,39 @@ function copyUrl(url,btn){{
     var orig=btn.innerHTML;btn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" width="13" height="13"><polyline points="20 6 9 17 4 12"/></svg>';
     setTimeout(function(){{btn.innerHTML=orig;}},1500);
   }}).catch(function(){{}});
+}}
+function fetchSub(id,btn){{
+  if(btn){{btn.disabled=true;btn.dataset.origHtml=btn.innerHTML;btn.innerHTML='<svg class="sv-spin-ico" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="animation:sv-spin .7s linear infinite"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>';}}
+  fetch('/api/subtitles/fetch',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{msg_id:id}})}})
+    .then(function(r){{return r.json();}})
+    .then(function(d){{
+      if(d.ok){{
+        _svShowVlcPill('\u2713 Subtitles loaded!',true);
+        if(window._VDATA&&Array.isArray(window._VDATA)){{
+          var item=window._VDATA.find(function(x){{return x.id==id;}});
+          if(item)item.has_sub=true;
+        }}
+        var card=document.querySelector('[data-mid="'+id+'"]');
+        if(card){{
+          var art=card.querySelector('.video-art');
+          if(art&&!art.querySelector('.ep-badge[style*="background:#2ebd59"]')){{
+            var epb=art.querySelector('.ep-badge');
+            var badge=document.createElement('span');
+            badge.className='ep-badge';
+            badge.style.cssText='background:#2ebd59;color:#fff;font-weight:800;margin-left:4px;';
+            badge.textContent='CC';
+            if(epb)epb.insertAdjacentElement('afterend',badge); else art.appendChild(badge);
+          }}
+        }}
+      }}else{{
+        _svShowVlcPill('\u26a0 '+(d.error||'No subtitles found'),false);
+      }}
+      if(btn){{btn.disabled=false;btn.innerHTML=btn.dataset.origHtml;}}
+    }})
+    .catch(function(){{
+      _svShowVlcPill('\u26a0 Subtitle search failed',false);
+      if(btn){{btn.disabled=false;btn.innerHTML=btn.dataset.origHtml;}}
+    }});
 }}
 (function(){{
   fetch('/api/album_data/{encoded_album}')

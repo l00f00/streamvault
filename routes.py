@@ -1,8 +1,9 @@
-"""routes.py — all HTTP route handlers for StreamVault."""
-
-import re, os, asyncio, hashlib as _hashlib, shutil, subprocess, time as _time
+import mimetypes, re, os, asyncio, hashlib as _hashlib, shutil, subprocess, time as _time
 from urllib.parse import unquote
 from aiohttp import web
+
+mimetypes.add_type("font/ttf", ".ttf")
+mimetypes.add_type("font/woff2", ".woff2")
 
 try:
     import orjson as _orjson
@@ -130,8 +131,9 @@ def _login_page(error=False):
     return f"""<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>StreamVault \u2014 Login</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap" media="print" onload="this.media='all'">
-<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap"></noscript>
+<link rel="preload" href="/static/fonts/outfit-400.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="preload" href="/static/fonts/outfit-600.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="preload" href="/static/fonts/outfit-700.ttf" as="font" type="font/ttf" crossorigin>
 <link rel="stylesheet" href="/static/style.css">
 <style>
 body{{display:flex;align-items:center;justify-content:center;padding:16px;min-height:100vh;}}
@@ -521,6 +523,10 @@ async def route_album_data(req: web.Request):
         return (0, 0, fname.lower())
 
     videos_sorted = sorted(videos, key=_ep_key)
+    
+    from cache import resume_get_many
+    msg_ids = [v["message_id"] for v in videos_sorted]
+    resume_info = resume_get_many(msg_ids)
 
     payload = [
         {
@@ -535,6 +541,8 @@ async def route_album_data(req: web.Request):
             "quality": v.get("quality", ""),
             "vlc": f"/stream/{v['message_id']}",
             "season": _parse_season(v.get("filename", "") or v.get("title", "")),
+            "resume": resume_info.get(v["message_id"]),
+            "has_sub": os.path.exists(os.path.join(_here, ".cache", "subtitles", f"{v['message_id']}_en.srt")),
         }
         for v in videos_sorted
     ]
@@ -862,29 +870,54 @@ async def route_fetch(req):
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
 
+_gap_fill_task = None
+
+
 # ── IMDB GAP FILL ────────────────────────────────────────────────────────────
 async def route_imdb_gap_fill(req: web.Request):
-    """POST /api/imdb_gap_fill — fill missing IMDB metadata using TMDB-first search."""
-    try:
-        import cache as _cache
+    """POST /api/imdb_gap_fill — fill missing IMDB metadata using TMDB-first search in background."""
+    global _gap_fill_task
+    if _gap_fill_task and not _gap_fill_task.done():
+        return web.json_response(
+            {"ok": False, "error": "Metadata gap fill is already running in the background."}
+        )
 
+    try:
         body = {}
         try:
             body = await req.json()
         except Exception:
             pass
 
-        album_names = body.get("albums") or None  # None = scan all
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None, _cache._fill_imdb_gaps_sync, album_names
+        album_names = body.get("albums") or None
+
+        async def run_in_bg():
+            try:
+                _push_notification("Metadata gap fill started in the background...", kind="info")
+                import cache as _cache
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None, _cache._fill_imdb_gaps_sync, album_names
+                )
+                
+                # Invalidate poster cache so new metadata shows
+                _cache._poster_mem.clear()
+                _cache._index_html_cache = None
+
+                msg = f"Metadata gap fill finished! Filled {result['filled']} album(s), skipped {result['skipped']}"
+                if result['errors'] > 0:
+                    msg += f", errors: {result['errors']}"
+                _push_notification(msg, kind="info")
+            except Exception as e:
+                _push_notification(f"Metadata gap fill failed: {e}", kind="err")
+
+        _gap_fill_task = asyncio.create_task(run_in_bg())
+        return web.json_response(
+            {
+                "ok": True,
+                "message": "Metadata gap fill started in the background. Check the notifications card below for progress status.",
+            }
         )
-
-        # Invalidate poster cache so new metadata shows
-        _cache._poster_mem.clear()
-        _cache._index_html_cache = None
-
-        return web.json_response({"ok": True, **result})
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
@@ -1207,10 +1240,7 @@ function doImdbGapFill(btn) {{
   fetch('/api/imdb_gap_fill',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{}})}}).then(function(r){{return r.json();}}).then(function(d){{
     btn.disabled=false;btn.innerHTML=orig;
     if(d.ok){{
-      var msg='Filled '+d.filled+' album'+(d.filled!==1?'s':'')+', skipped '+d.skipped;
-      if(d.errors) msg+=', errors: '+d.errors;
-      alert(msg);
-      if(d.filled>0) window.location.reload();
+      alert(d.message);
     }} else {{
       alert('Error: '+(d.error||'unknown'));
     }}
@@ -1224,17 +1254,22 @@ function doImdbGapFill(btn) {{
       document.getElementById('loginToggle').checked=!!j.login_required;
     }}
   }} catch(e) {{}}
-  try {{
-    var r=await fetch('/api/notifications');
-    var j=await r.json();
-    var el=document.getElementById('notifList');
-    if(!j.items||j.items.length===0){{el.textContent='No new notifications.';return;}}
-    el.innerHTML=j.items.map(function(n){{
-      var col=n.type==='err'?'#f66':n.type==='ok'?'#4c4':'#fa0';
-      var d=new Date(n.ts*1000).toLocaleTimeString();
-      return '<div style="padding:4px 0;border-bottom:1px solid var(--border);color:'+col+';">['+d+'] '+n.msg+'</div>';
-    }}).join('');
-  }} catch(e) {{}}
+  
+  async function loadNotifications() {{
+    try {{
+      var r=await fetch('/api/notifications');
+      var j=await r.json();
+      var el=document.getElementById('notifList');
+      if(!j.items||j.items.length===0){{el.textContent='No new notifications.';return;}}
+      el.innerHTML=j.items.map(function(n){{
+        var col=n.type==='err'?'#f66':n.type==='info'?'#4a9':n.type==='ok'?'#4c4':'#fa0';
+        var d=new Date(n.ts*1000).toLocaleTimeString();
+        return '<div style="padding:4px 0;border-bottom:1px solid var(--border);color:'+col+';">['+d+'] '+n.msg+'</div>';
+      }}).join('');
+    }} catch(e) {{}}
+  }}
+  loadNotifications();
+  setInterval(loadNotifications, 4000);
 }})();
 </script>""" + _PAGE_CLOSE + """</body></html>"""
     return web.Response(content_type="text/html", text=html)
@@ -1322,6 +1357,13 @@ _VLC_PLUGIN_DIR = None
 _active_pollers: dict[int, asyncio.Task] = {}
 _poller_session: dict[int, int] = {}  # msg_id → session generation counter
 _poller_generation: int = 0  # global monotonic counter
+_active_playback_info: dict = {
+    "msg_id": None,
+    "pos": 0.0,
+    "dur": 0.0,
+    "state": "stopped",
+    "updated_at": 0.0,
+}
 
 
 async def _vlc_position_poller(msg_id: int, duration: float, generation: int):
@@ -1333,6 +1375,7 @@ async def _vlc_position_poller(msg_id: int, duration: float, generation: int):
     """
     import aiohttp as _aio
     import cache as _cache_mod
+    import time as _time_mod
     from cache import resume_set
 
     url = f"http://127.0.0.1:{_VLC_HTTP_PORT}/requests/status.json"
@@ -1371,6 +1414,13 @@ async def _vlc_position_poller(msg_id: int, duration: float, generation: int):
                             if _poller_session.get(msg_id) != generation:
                                 return
 
+                            # Update real-time active playback info for frontend sync
+                            _active_playback_info["msg_id"] = msg_id
+                            _active_playback_info["pos"] = pos
+                            _active_playback_info["dur"] = dur
+                            _active_playback_info["state"] = state
+                            _active_playback_info["updated_at"] = _time_mod.time()
+
                             if state not in ("paused", "stopped") and pos > 0:
                                 if abs(pos - last_pos) < 0.1:
                                     stall_count += 1
@@ -1407,6 +1457,9 @@ async def _vlc_position_poller(msg_id: int, duration: float, generation: int):
     except Exception as e:
         print(f"[resume] poller error msg={msg_id}: {e}")
     finally:
+        # Clear active playback status if this poller session is stopping
+        if _active_playback_info.get("msg_id") == msg_id:
+            _active_playback_info["state"] = "stopped"
         # Only remove playhead if this is still the active generation
         if _poller_session.get(msg_id) == generation:
             _stream_cache.remove_playhead(msg_id)
@@ -1476,6 +1529,11 @@ async def _launch_vlc_direct(
         print(f"[vlc] ERROR: executable not found at {vlc_path!r}")
         return
 
+    # Check and fetch external English subtitles
+    from subtitles import fetch_english_subtitle
+    sub_path = await fetch_english_subtitle(msg_id, display_title, filename)
+    sub_args = [f"--sub-file={sub_path}"] if sub_path else []
+
     # Spawn VLC immediately — zero pre-launch blocking.
     # All cache warming happens async AFTER VLC is spawned so the GUI opens instantly.
     #
@@ -1496,6 +1554,10 @@ async def _launch_vlc_direct(
             "--http-host=127.0.0.1",
             f"--http-port={_VLC_HTTP_PORT}",
             f"--http-password={_VLC_HTTP_PASS}",
+            # Force English subtitle track selection automatically for embedded tracks
+            "--sub-language=en,eng,English",
+            "--sub-autodetect-file",
+            *sub_args,
             # Loopback delivery — reduce network-caching since 127.0.0.1 has
             # no real network jitter; large values only delay first-frame render.
             "--network-caching=2000",
@@ -2865,6 +2927,52 @@ async def route_notifications(req: web.Request):
     return web.json_response({"ok": True, "items": items})
 
 
+# ── REALTIME PLAYBACK STATUS ──────────────────────────────────────────────────
+async def route_playback_status(req: web.Request):
+    """GET /api/playback_status — return current active VLC playback state for realtime frontend sync."""
+    msg_ids_param = req.query.get("msg_ids", "")
+    additional_resume = {}
+    if msg_ids_param:
+        try:
+            mids = [
+                int(m.strip()) for m in msg_ids_param.split(",") if m.strip().isdigit()
+            ]
+            if mids:
+                from cache import resume_get_many
+
+                additional_resume = resume_get_many(mids)
+        except Exception:
+            pass
+    return web.json_response(
+        {
+            "ok": True,
+            "active": _active_playback_info,
+            "resume": additional_resume,
+        }
+    )
+
+
+# ── ON-DEMAND SUBTITLE FETCHING ────────────────────────────────────────────────
+async def route_fetch_subtitle(req: web.Request):
+    """POST /api/subtitles/fetch — search and fetch English subtitles on-demand."""
+    try:
+        j = await req.json()
+        msg_id = int(j.get("msg_id"))
+        import cache as _cache
+
+        meta = _cache._cache_meta.get(msg_id, {})
+        title = meta.get("title", "")
+        filename = meta.get("filename", "")
+        from subtitles import fetch_english_subtitle
+
+        sub_path = await fetch_english_subtitle(msg_id, title, filename)
+        if sub_path:
+            return web.json_response({"ok": True, "path": sub_path})
+        return web.json_response({"ok": False, "error": "No subtitles found"})
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)})
+
+
 # ── REFETCH MISSING THUMBS ────────────────────────────────────────────────────
 # ── APP FACTORY ───────────────────────────────────────────────────────────────
 def make_app():
@@ -2908,6 +3016,8 @@ def make_app():
     app.router.add_get("/api/history", route_history)
     app.router.add_post("/api/history/remove", route_history_remove)
     app.router.add_post("/api/history/record", route_history_record)
+    app.router.add_get("/api/playback_status", route_playback_status)
+    app.router.add_post("/api/subtitles/fetch", route_fetch_subtitle)
     app.router.add_post("/hls/{msg_id:\\d+}/start", route_hls_start)
     app.router.add_get("/hls/{msg_id:\\d+}/playlist.m3u8", route_hls_playlist)
     app.router.add_get("/hls/{msg_id:\\d+}/{seg_name}", route_hls_segment)

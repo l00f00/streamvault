@@ -1,3 +1,8 @@
+@font-face{font-family:'Outfit';font-style:normal;font-weight:300;font-display:swap;src:url('/static/fonts/outfit-300.ttf') format('truetype');}
+@font-face{font-family:'Outfit';font-style:normal;font-weight:400;font-display:swap;src:url('/static/fonts/outfit-400.ttf') format('truetype');}
+@font-face{font-family:'Outfit';font-style:normal;font-weight:500;font-display:swap;src:url('/static/fonts/outfit-500.ttf') format('truetype');}
+@font-face{font-family:'Outfit';font-style:normal;font-weight:600;font-display:swap;src:url('/static/fonts/outfit-600.ttf') format('truetype');}
+@font-face{font-family:'Outfit';font-style:normal;font-weight:700;font-display:swap;src:url('/static/fonts/outfit-700.ttf') format('truetype');}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;font-family:'Outfit',system-ui,sans-serif;}
 :root{
   --bg:#000000;--bg2:#060606;--surface:#0a0a0a;--card:#0d0d0d;--card-hi:#131313;
@@ -224,6 +229,10 @@ body{padding-top:60px;}
 .play-circle svg{fill:#000;width:16px;height:16px;margin-left:3px;}
 .dur-badge{position:absolute;bottom:7px;right:7px;background:rgba(0,0,0,.9);color:var(--text);font-size:.6rem;font-weight:600;padding:2px 6px;border-radius:5px;letter-spacing:.02em;}
 .ep-badge{position:absolute;top:7px;left:7px;background:rgba(0,0,0,.9);color:var(--accent);font-size:.58rem;font-weight:700;padding:2px 7px;border-radius:5px;border:1px solid rgba(245,197,24,.22);letter-spacing:.05em;}
+.resume-progress-bar{position:absolute;bottom:0;left:0;height:4px;width:100%;background:rgba(255,255,255,0.18);z-index:3;}
+.resume-progress-fill{height:100%;background:var(--accent);transition:width .2s;}
+.watched-badge{position:absolute;top:7px;right:7px;background:rgba(46,125,50,0.9);color:#fff;font-size:.58rem;font-weight:700;padding:2px 7px;border-radius:5px;border:1px solid rgba(76,175,80,0.3);letter-spacing:.05em;z-index:3;}
+.unfinished-badge{position:absolute;top:7px;right:7px;background:rgba(230,81,0,0.9);color:#fff;font-size:.58rem;font-weight:700;padding:2px 7px;border-radius:5px;border:1px solid rgba(230,81,0,0.3);letter-spacing:.05em;z-index:3;}
 /* ── Video body ── */
 .video-body{padding:12px 13px 16px;flex:none;display:flex;flex-direction:column;gap:5px;min-height:0;}
 .video-name{font-size:.85rem;font-weight:600;line-height:1.4;min-height:calc(.85rem * 1.4 * 3);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;line-clamp:3;overflow:hidden;color:var(--text);word-break:break-word;overflow-wrap:break-word;}
