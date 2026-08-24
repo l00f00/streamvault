@@ -406,10 +406,50 @@ async def fetch_from_yify(msg_id: int, imdb_id: str) -> str | None:
 
 # ── Download & cache a subtitle message ───────────────────────────────────────
 
+def _find_best_file_in_zip(
+    z: zipfile.ZipFile, target_title: str, target_filename: str
+) -> tuple[str | None, bytes | None]:
+    """Find the best matching subtitle file inside a ZIP archive for the target video."""
+    candidates = [
+        n for n in z.namelist()
+        if not n.startswith("__MACOSX")
+        and not os.path.basename(n).startswith("._")
+        and os.path.splitext(n)[1].lower() in {".srt", ".vtt", ".ass", ".sub"}
+    ]
+    if not candidates:
+        return None, None
+
+    v_s, v_e = extract_season_episode(f"{target_title} {target_filename}")
+
+    scored: list[tuple[float, str]] = []
+    for name in candidates:
+        base = os.path.basename(name)
+        sc = calculate_match_score(target_title, target_filename, base)
+
+        # Bonus for English indicators inside the zip
+        if any(w in base.lower() for w in ["eng", "english", ".en."]):
+            sc += 15.0
+        scored.append((sc, name))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    best_name = scored[0][1]
+    return best_name, z.read(best_name)
+
+
+# ── Download & cache a subtitle message ───────────────────────────────────────
+
 async def _download_subtitle_msg(
-    client, entity, msg_id: int, sub_msg_id: int, filename: str
+    client,
+    entity,
+    msg_id: int,
+    sub_msg_id: int,
+    filename: str,
+    target_title: str = "",
+    target_filename: str = "",
 ) -> str | None:
-    """Download a subtitle Telegram message and save it to the local cache."""
+    """Download a subtitle Telegram message and save it to the local cache.
+    Intelligently handles single .srt/.vtt files as well as multi-episode .zip packs.
+    """
     cache_path = os.path.join(SUB_DIR, f"{msg_id}_en.srt")
     temp_path = cache_path + ".tmp"
 
@@ -426,28 +466,39 @@ async def _download_subtitle_msg(
         if ext == ".zip":
             try:
                 with zipfile.ZipFile(temp_path, "r") as z:
-                    srt_files = [
-                        n for n in z.namelist()
-                        if os.path.splitext(n)[1].lower() in {".srt", ".vtt", ".ass"}
-                    ]
-                    if srt_files:
-                        content = z.read(srt_files[0])
-                        with open(cache_path, "wb") as f:
-                            f.write(content)
-                        os.remove(temp_path)
+                    chosen_name, content = _find_best_file_in_zip(
+                        z, target_title, target_filename
+                    )
+                    if chosen_name and content:
+                        print(
+                            f"[subtitles] Extracted '{chosen_name}' from zip '{filename}' for '{target_title}'"
+                        )
+                        # If the internal file is a WebVTT, clean it
+                        if chosen_name.lower().endswith(".vtt"):
+                            text_content = content.decode("utf-8", errors="ignore")
+                            text_content = re.sub(r"^WEBVTT\s*\n", "", text_content)
+                            with open(cache_path, "w", encoding="utf-8") as f:
+                                f.write(text_content)
+                        else:
+                            with open(cache_path, "wb") as f:
+                                f.write(content)
+
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
                         return cache_path
             except Exception as ze:
-                print(f"[subtitles] Zip extract failed: {ze}")
+                print(f"[subtitles] Zip extract failed for '{filename}': {ze}")
+
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             return None
 
         elif ext == ".vtt":
             with open(temp_path, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read()
-            content = re.sub(r"^WEBVTT\s*\n", "", content)
+                content_str = f.read()
+            content_str = re.sub(r"^WEBVTT\s*\n", "", content_str)
             with open(cache_path, "w", encoding="utf-8") as f:
-                f.write(content)
+                f.write(content_str)
             os.remove(temp_path)
             return cache_path
 
@@ -462,6 +513,7 @@ async def _download_subtitle_msg(
         if os.path.exists(temp_path):
             os.remove(temp_path)
         return None
+
 
 
 # ── Main entry point ───────────────────────────────────────────────────────────
@@ -499,7 +551,13 @@ async def fetch_english_subtitle(msg_id: int, title: str, filename: str) -> str 
                 f"'{best_filename}' score={best_score:.1f} (sub_msg={best_msg_id})"
             )
             path = await _download_subtitle_msg(
-                client, entity, msg_id, best_msg_id, best_filename
+                client,
+                entity,
+                msg_id,
+                best_msg_id,
+                best_filename,
+                target_title=title,
+                target_filename=filename,
             )
             if path:
                 return path
@@ -512,7 +570,13 @@ async def fetch_english_subtitle(msg_id: int, title: str, filename: str) -> str 
             if candidates:
                 best_msg_id, best_filename, best_score = candidates[0]
                 path = await _download_subtitle_msg(
-                    client, entity, msg_id, best_msg_id, best_filename
+                    client,
+                    entity,
+                    msg_id,
+                    best_msg_id,
+                    best_filename,
+                    target_title=title,
+                    target_filename=filename,
                 )
                 if path:
                     return path
@@ -599,9 +663,12 @@ async def apply_subtitle_option(
     msg_id: int, sub_msg_id: int | None, filename: str, source: str = "telegram"
 ) -> str | None:
     """Download and set the specific chosen subtitle for this video."""
+    import cache as _cache
+    video = _cache._cache_meta.get(msg_id, {})
+    title = video.get("title", "")
+    target_filename = video.get("filename", "")
+
     if source == "yify":
-        import cache as _cache
-        video = _cache._cache_meta.get(msg_id, {})
         pm = _cache._poster_mem.get(video.get("album", ""), {})
         imdb_id = pm.get("meta", {}).get("imdb_id")
         if imdb_id:
@@ -617,5 +684,14 @@ async def apply_subtitle_option(
     if not entity:
         return None
 
-    return await _download_subtitle_msg(client, entity, msg_id, sub_msg_id, filename)
+    return await _download_subtitle_msg(
+        client,
+        entity,
+        msg_id,
+        sub_msg_id,
+        filename,
+        target_title=title,
+        target_filename=target_filename,
+    )
+
 
