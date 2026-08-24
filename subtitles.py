@@ -29,6 +29,10 @@ import re
 import sqlite3
 import time
 import zipfile
+import tarfile
+import shutil
+import subprocess
+import tempfile
 import io
 import difflib
 import aiohttp
@@ -41,7 +45,8 @@ SUB_DIR = os.path.join(_here, ".cache", "subtitles")
 os.makedirs(SUB_DIR, exist_ok=True)
 
 _INDEX_DB = os.path.join(_here, ".cache", "subtitle_index.db")
-_SUBTITLE_EXTS = {".srt", ".vtt", ".ass", ".sub", ".zip"}
+_SUBTITLE_EXTS = {".srt", ".vtt", ".ass", ".sub", ".zip", ".rar", ".7z", ".tar", ".gz"}
+_ARCHIVE_EXTS = {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"}
 
 # ── Noise words to strip during fuzzy matching ─────────────────────────────────
 _NOISE_WORDS = {
@@ -472,48 +477,140 @@ def _normalize_subtitle_text(raw_bytes: bytes, filename: str) -> str:
     return text.strip()
 
 
-# ── Download & cache a subtitle message ───────────────────────────────────────
+# ── Recursive Multi-Format Archive Extraction (ZIP, RAR, 7z, TAR) ─────────────
 
-def _find_best_file_in_zip(
-    z: zipfile.ZipFile, target_title: str, target_filename: str
-) -> tuple[str | None, bytes | None]:
-    """Find the best matching subtitle file inside a ZIP archive for the target video."""
-    candidates = [
-        n for n in z.namelist()
-        if not n.startswith("__MACOSX")
-        and not os.path.basename(n).startswith("._")
-        and not n.endswith("/")
-        and os.path.splitext(n)[1].lower() in {".srt", ".vtt", ".ass", ".sub"}
-    ]
-    if not candidates:
+def _extract_single_archive(archive_path: str, dest_dir: str) -> bool:
+    """Extract a single archive file (ZIP, RAR, 7z, TAR, etc.) into dest_dir."""
+    # 1. Native Python zipfile
+    if zipfile.is_zipfile(archive_path):
+        try:
+            with zipfile.ZipFile(archive_path, "r") as z:
+                z.extractall(dest_dir)
+            return True
+        except Exception:
+            pass
+
+    # 2. Native Python tarfile
+    if tarfile.is_tarfile(archive_path):
+        try:
+            with tarfile.open(archive_path, "r:*") as t:
+                t.extractall(dest_dir)
+            return True
+        except Exception:
+            pass
+
+    # 3. System bsdtar (built into Windows 10/11, macOS, Linux — supports .rar, .7z, .zip, etc.)
+    tar_exe = shutil.which("tar")
+    if tar_exe:
+        try:
+            res = subprocess.run(
+                [tar_exe, "-xf", archive_path, "-C", dest_dir],
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+            if res.returncode == 0:
+                return True
+        except Exception as e:
+            print(f"[subtitles] tar extraction error on '{archive_path}': {e}")
+
+    # 4. External tools if present (7z, 7za, unrar, winrar)
+    for tool, args in [
+        ("7z", ["7z", "x", "-y", f"-o{dest_dir}", archive_path]),
+        ("7za", ["7za", "x", "-y", f"-o{dest_dir}", archive_path]),
+        ("unrar", ["unrar", "x", "-y", archive_path, dest_dir]),
+        ("winrar", ["winrar", "x", "-ibck", "-y", archive_path, dest_dir]),
+    ]:
+        if shutil.which(tool):
+            try:
+                res = subprocess.run(args, capture_output=True, text=True, timeout=45)
+                if res.returncode == 0:
+                    return True
+            except Exception:
+                pass
+
+    return False
+
+
+def _extract_all_recursive(archive_path: str, extract_base: str, max_depth: int = 3) -> list[str]:
+    """Recursively unpack an archive and any nested archives within it (e.g. Series.zip -> Season 1.zip/rar).
+    Returns a list of absolute paths to all discovered subtitle files."""
+    # Initial unpack
+    _extract_single_archive(archive_path, extract_base)
+
+    # Recursively find and unpack nested archives
+    for _ in range(max_depth):
+        found_nested = False
+        for root, _, files in os.walk(extract_base):
+            for f in files:
+                ext = os.path.splitext(f)[1].lower()
+                if ext in _ARCHIVE_EXTS:
+                    nested_archive = os.path.join(root, f)
+                    sub_out = os.path.join(root, f"_unpacked_{os.path.splitext(f)[0]}")
+                    os.makedirs(sub_out, exist_ok=True)
+                    if _extract_single_archive(nested_archive, sub_out):
+                        found_nested = True
+                        try:
+                            os.remove(nested_archive)
+                        except Exception:
+                            pass
+        if not found_nested:
+            break
+
+    # Discover all extracted subtitle files
+    sub_files = []
+    for root, _, files in os.walk(extract_base):
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext in {".srt", ".vtt", ".ass", ".sub"}:
+                if not f.startswith("._") and "__MACOSX" not in root:
+                    sub_files.append(os.path.join(root, f))
+
+    return sub_files
+
+
+def _find_best_file_in_archive_tree(
+    sub_files: list[str], base_dir: str, target_title: str, target_filename: str
+) -> tuple[str | None, str | None]:
+    """Find the best matching subtitle file from all recursively extracted files.
+    Returns (chosen_rel_name, normalized_utf8_text)."""
+    if not sub_files:
         return None, None
 
-    # Single subtitle in zip: immediate direct match
-    if len(candidates) == 1:
-        return candidates[0], z.read(candidates[0])
+    # Single subtitle in archive: immediate direct match
+    if len(sub_files) == 1:
+        chosen_path = sub_files[0]
+        rel_name = os.path.relpath(chosen_path, base_dir).replace("\\", "/")
+        with open(chosen_path, "rb") as f:
+            raw = f.read()
+        return rel_name, _normalize_subtitle_text(raw, chosen_path)
 
     v_s, v_e = extract_season_episode(f"{target_title} {target_filename}")
 
     scored: list[tuple[float, str]] = []
-    for name in candidates:
-        # Pass internal relative path to preserve directory context (e.g. "Season 1/07.srt")
-        sc = calculate_match_score(target_title, target_filename, name)
+    for full_p in sub_files:
+        rel_name = os.path.relpath(full_p, base_dir).replace("\\", "/")
+        sc = calculate_match_score(target_title, target_filename, rel_name)
 
-        # Bonus for exact episode match
-        s_s, s_e = extract_season_episode(name)
+        # Bonus for exact episode / season match
+        s_s, s_e = extract_season_episode(rel_name)
         if v_e is not None and s_e is not None and v_e == s_e:
             sc += 100.0
             if v_s is not None and s_s is not None and v_s == s_s:
                 sc += 50.0
 
-        # Bonus for English indicators inside the zip
-        if any(w in name.lower() for w in ["eng", "english", ".en."]):
+        # Bonus for English indicators
+        if any(w in rel_name.lower() for w in ["eng", "english", ".en."]):
             sc += 15.0
-        scored.append((sc, name))
+
+        scored.append((sc, full_p))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    best_name = scored[0][1]
-    return best_name, z.read(best_name)
+    best_path = scored[0][1]
+    rel_name = os.path.relpath(best_path, base_dir).replace("\\", "/")
+    with open(best_path, "rb") as f:
+        raw = f.read()
+    return rel_name, _normalize_subtitle_text(raw, best_path)
 
 
 # ── Download & cache a subtitle message ───────────────────────────────────────
@@ -528,7 +625,7 @@ async def _download_subtitle_msg(
     target_filename: str = "",
 ) -> str | None:
     """Download a subtitle Telegram message and save it to the local cache.
-    Intelligently handles single .srt/.vtt files as well as multi-episode .zip packs.
+    Intelligently handles single .srt/.vtt files as well as full-season / series .zip/.rar packs.
     """
     cache_path = os.path.join(SUB_DIR, f"{msg_id}_en.srt")
     temp_path = cache_path + ".tmp"
@@ -546,29 +643,36 @@ async def _download_subtitle_msg(
             return None
 
         ext = os.path.splitext(filename)[1].lower()
-        is_zip = ext == ".zip" or zipfile.is_zipfile(temp_path)
+        is_archive = (
+            ext in _ARCHIVE_EXTS
+            or zipfile.is_zipfile(temp_path)
+            or tarfile.is_tarfile(temp_path)
+        )
 
-        if is_zip:
+        if is_archive:
             try:
-                with zipfile.ZipFile(temp_path, "r") as z:
-                    chosen_name, content = _find_best_file_in_zip(
-                        z, target_title, target_filename
-                    )
-                    if chosen_name and content:
-                        print(
-                            f"[subtitles] Extracted '{chosen_name}' from zip '{filename}' for '{target_title}'"
+                with tempfile.TemporaryDirectory() as extract_dir:
+                    sub_files = _extract_all_recursive(temp_path, extract_dir)
+                    if sub_files:
+                        chosen_name, norm_text = _find_best_file_in_archive_tree(
+                            sub_files, extract_dir, target_title, target_filename
                         )
-                        norm_text = _normalize_subtitle_text(content, chosen_name)
-                        with open(cache_path, "w", encoding="utf-8") as f:
-                            f.write(norm_text)
+                        if chosen_name and norm_text:
+                            print(
+                                f"[subtitles] Extracted '{chosen_name}' from archive '{filename}' for '{target_title}'"
+                            )
+                            with open(cache_path, "w", encoding="utf-8") as f:
+                                f.write(norm_text)
 
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
-                        return cache_path
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
+                            return cache_path
+                        else:
+                            print(f"[subtitles] No matching episode subtitle found in archive '{filename}'")
                     else:
-                        print(f"[subtitles] No suitable subtitle file found inside zip '{filename}'")
+                        print(f"[subtitles] No subtitle files discovered inside archive '{filename}'")
             except Exception as ze:
-                print(f"[subtitles] Zip extract failed for '{filename}': {ze}")
+                print(f"[subtitles] Archive extract failed for '{filename}': {ze}")
 
             if os.path.exists(temp_path):
                 os.remove(temp_path)
@@ -707,7 +811,7 @@ async def list_subtitle_options(msg_id: int, title: str, filename: str) -> dict:
             "filename": sub_filename,
             "score": round(score, 1),
             "source": "telegram",
-            "is_zip": sub_filename.lower().endswith(".zip"),
+            "is_archive": any(sub_filename.lower().endswith(x) for x in _ARCHIVE_EXTS),
             "ext": os.path.splitext(sub_filename)[1].lower().lstrip("."),
             "season": s,
             "episode": e,
