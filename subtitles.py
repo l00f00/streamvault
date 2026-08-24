@@ -58,6 +58,10 @@ _NOISE_WORDS = {
     "yify", "yts", "psa", "eztv", "rarbg", "galaxytv", "tgx", "ettv",
     "eng", "english", "sdh", "sub", "subs", "subtitle", "subtitles",
     "srt", "vtt", "ass", "mp4", "mkv", "avi", "webm", "mov",
+    # Season/series descriptors that shouldn't count as show title keywords
+    "season", "episode", "series", "complete", "collection",
+    "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
+    "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th",
 }
 
 
@@ -118,6 +122,18 @@ def extract_season_episode(text: str) -> tuple[int | None, int | None]:
 
     # Replace path separators so directories count as context (e.g. "Season 1/07.srt")
     path_norm = text.replace("\\", "/").strip()
+
+    # 0. Ordinal season words: "first-season", "second season", "season one", etc.
+    _ORDINALS_MAP = {
+        "first": 1, "1st": 1, "second": 2, "2nd": 2, "third": 3, "3rd": 3,
+        "fourth": 4, "4th": 4, "fifth": 5, "5th": 5, "sixth": 6, "6th": 6,
+        "seventh": 7, "7th": 7, "eighth": 8, "8th": 8, "ninth": 9, "9th": 9,
+        "tenth": 10, "10th": 10,
+    }
+    norm_ord = path_norm.lower().replace("-", " ").replace("_", " ")
+    for word, num in _ORDINALS_MAP.items():
+        if f"{word} season" in norm_ord or f"season {word}" in norm_ord:
+            return num, None
 
     # 1. Season folder + filename: "Season 1/07.srt" or "S02/04.srt"
     m = re.search(r"(?i)(?:Season|S)\s*(\d{1,2})[/\-_ ]+.*?(\d{1,3})(?:\.\w+)?$", path_norm)
@@ -192,16 +208,53 @@ def tokenize_clean(text: str) -> set[str]:
 
 # ── Fuzzy match scoring ────────────────────────────────────────────────────────
 
+def _get_show_title_keywords(title: str, filename: str) -> set[str]:
+    """Extract only the show title tokens (strip SxxExx, Season x, etc.)."""
+    combined = f"{title} {filename}"
+    # Trim everything from S01E01 / Season 1 / 1x04 onwards
+    cleaned = re.sub(r"(?i)\b(S\d+E\d+|S\d+|Season\s*\d+|E\d+|Ep\s*\d+|\d+x\d+)\b.*", "", combined)
+    toks = tokenize_clean(cleaned)
+    if not toks:
+        toks = tokenize_clean(combined)  # fallback if nothing survived
+    return toks
+
+
 def calculate_match_score(
     video_title: str, video_filename: str, sub_filename: str, distance: int = 0
 ) -> float:
     """Score a subtitle candidate against a video (0 = worst, higher = better).
 
-    Returns -1000 if there is a definitive mismatch (wrong episode number),
-    signalling the caller to reject this candidate.
+    Returns -1000 if there is a definitive mismatch (wrong episode number or
+    completely different show title), signalling the caller to reject this candidate.
     """
     v_combined = f"{video_title} {video_filename}".lower()
     s_clean = sub_filename.lower()
+    ext = os.path.splitext(s_clean)[1].lower()
+    is_archive = ext in _ARCHIVE_EXTS
+
+    v_tok = tokenize_clean(v_combined)
+    s_tok = tokenize_clean(s_clean)
+    show_toks = _get_show_title_keywords(video_title, video_filename)
+
+    show_overlap = show_toks & s_tok
+    total_overlap = v_tok & s_tok
+
+    # Substring check for core show name (handles hyphens/dots in archive names)
+    norm_t = re.sub(r"[^\w\s]", " ", video_title.lower())
+    clean_show = re.sub(r"(?i)\b(s\d+e\d+|s\d+|season\s*\d+|e\d+|ep\s*\d+|\d+x\d+)\b.*", "", norm_t).strip()
+    clean_show_nospace = re.sub(r"\s+", "", clean_show)
+    sub_nospace = re.sub(r"[^\w]", "", s_clean)
+
+    has_title_match = (
+        bool(show_overlap)
+        or (len(clean_show_nospace) >= 4 and (
+            clean_show_nospace in sub_nospace or sub_nospace.startswith(clean_show_nospace)
+        ))
+    )
+
+    # If candidate shares NO show-title tokens -> completely different show -> reject
+    if not has_title_match:
+        return -1000.0
 
     # 1. Season / Episode agreement
     v_s, v_e = extract_season_episode(v_combined)
@@ -212,24 +265,29 @@ def calculate_match_score(
         if s_e is not None:
             if v_e != s_e:
                 return -1000.0          # Wrong episode — hard reject
-            score += 55.0               # Episode match
+            score += 60.0               # Exact episode match
             if v_s is not None and s_s is not None:
                 if v_s != s_s:
                     return -1000.0      # Wrong season — hard reject
-                score += 35.0           # Both season + episode match
+                score += 40.0           # Exact season + episode match
+        elif is_archive:
+            # It's a season/series pack archive — great candidate for extraction
+            if v_s is not None and s_s is not None:
+                if v_s != s_s:
+                    return -1000.0      # Wrong season pack
+                score += 70.0           # Correct season pack — very high reward
+            else:
+                score += 55.0           # Complete series pack (season unknown in sub name)
         else:
-            score -= 10.0               # No ep tag in sub name
+            score -= 10.0               # No ep tag in sub name (non-archive)
     elif s_e is not None:
         score -= 20.0                   # Sub has episode tag, video doesn't
 
-    # 2. Keyword / token overlap (Jaccard + subset ratio)
-    v_tok = tokenize_clean(v_combined)
-    s_tok = tokenize_clean(s_clean)
+    # 2. Keyword / token overlap (Jaccard + title-subset ratio)
     if v_tok and s_tok:
-        overlap = v_tok & s_tok
-        jaccard = len(overlap) / max(len(v_tok | s_tok), 1)
+        jaccard = len(total_overlap) / max(len(v_tok | s_tok), 1)
         score += jaccard * 40.0
-        score += (len(overlap) / max(len(v_tok), 1)) * 25.0
+        score += (len(show_overlap) / max(len(show_toks), 1)) * 30.0
 
     # 3. String similarity (SequenceMatcher)
     sim = difflib.SequenceMatcher(
@@ -239,14 +297,8 @@ def calculate_match_score(
     ).ratio()
     score += sim * 20.0
 
-    # 4. Direct substring bonus
-    norm_t = re.sub(r"[^\w\s]", "", video_title.lower()).strip()
-    norm_s = re.sub(r"[^\w\s]", "", s_clean).strip()
-    if norm_t and (norm_t in norm_s or norm_s in norm_t):
-        score += 25.0
-
-    # 5. Proximity tie-breaker (max +10 for adjacent messages)
-    score += max(0.0, 10.0 - distance * 0.001)   # ← tiny weight; distance can be huge
+    # 4. Proximity tie-breaker (max +10 for adjacent messages)
+    score += max(0.0, 10.0 - distance * 0.001)
 
     return score
 
@@ -341,15 +393,17 @@ def query_subtitle_index(
 
     Uses season/episode pre-filtering when available (O(log n) index scan),
     then fuzzy-scores the remaining candidates and returns them sorted by score.
+    Archive files (.zip/.rar etc.) are *always* included as separate candidates
+    because they may contain season/series packs that cover the requested episode.
 
     Returns:
         List of (msg_id, filename, score) tuples, best match first.
     """
     conn = _db_connect()
-    
+
     try:
         if season is not None and episode is not None:
-            # Fast path: filter by season + episode first
+            # Fast path: exact season + episode
             rows = conn.execute(
                 "SELECT msg_id, filename FROM subtitle_files WHERE season=? AND episode=?",
                 (season, episode),
@@ -360,11 +414,24 @@ def query_subtitle_index(
                     "SELECT msg_id, filename FROM subtitle_files WHERE episode=? AND season IS NULL",
                     (episode,),
                 ).fetchall()
+            # Always add archives — they may be season packs containing this episode
+            archive_rows = conn.execute(
+                "SELECT msg_id, filename FROM subtitle_files WHERE ext IN ('.zip','.rar','.7z','.tar','.gz')"
+            ).fetchall()
+            # Merge without duplicates
+            seen = {r[0] for r in rows}
+            rows = list(rows) + [r for r in archive_rows if r[0] not in seen]
+
         elif episode is not None:
             rows = conn.execute(
                 "SELECT msg_id, filename FROM subtitle_files WHERE episode=?",
                 (episode,),
             ).fetchall()
+            archive_rows = conn.execute(
+                "SELECT msg_id, filename FROM subtitle_files WHERE ext IN ('.zip','.rar','.7z','.tar','.gz')"
+            ).fetchall()
+            seen = {r[0] for r in rows}
+            rows = list(rows) + [r for r in archive_rows if r[0] not in seen]
         else:
             # No episode info — fetch all and rely purely on fuzzy scoring
             rows = conn.execute(
@@ -384,6 +451,7 @@ def query_subtitle_index(
 
     scored.sort(key=lambda x: x[2], reverse=True)
     return scored
+
 
 
 # ── Yify online fallback ───────────────────────────────────────────────────────
