@@ -1234,8 +1234,9 @@ function openSubChooser(id, btn){{
     d.options.forEach(function(opt, idx){{
       var isTg = opt.source === 'telegram';
       var isSubdl = opt.source === 'subdl';
-      var tagClass = isTg ? 'tg' : (isSubdl ? 'subdl' : 'yify');
-      var tagLabel = isTg ? 'Telegram' : (isSubdl ? 'Subdl (' + (opt.language || 'EN') + (opt.hi ? ' SDH' : '') + ')' : 'Yify Online');
+      var isSubSource = opt.source === 'subsource';
+      var tagClass = isTg ? 'tg' : (isSubdl ? 'subdl' : (isSubSource ? 'subsource' : 'yify'));
+      var tagLabel = isTg ? 'Telegram' : (isSubdl ? 'Subdl (' + (opt.language || 'EN') + (opt.hi ? ' SDH' : '') + ')' : (isSubSource ? 'SubSource (' + (opt.language || 'EN') + (opt.hi ? ' SDH' : '') + ')' : 'Yify Online'));
       var scoreLabel = opt.score > 0 ? (Math.round(Math.min(100, opt.score)) + '% Match') : '';
       var subIdStr = (opt.id !== null && opt.id !== undefined) ? opt.id : 'null';
       var optUrl = opt.url || '';

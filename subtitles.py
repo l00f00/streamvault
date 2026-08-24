@@ -631,6 +631,164 @@ async def download_subdl_option(
         return None
 
 
+# ── SubSource online search + download ────────────────────────────────────────
+
+_SUBSOURCE_BASE = "https://api.subsource.net/api/v1"
+
+async def search_subsource(
+    title: str,
+    season: int | None = None,
+    episode: int | None = None,
+    imdb_id: str | None = None,
+    languages: str = "english",
+) -> list[dict]:
+    """Search SubSource for subtitle candidates and return a normalized list."""
+    api_key = getattr(_cfg, "SUBSOURCE_API_KEY", "")
+    if not api_key:
+        return []
+
+    headers = {
+        "X-API-Key": api_key,
+        "User-Agent": "StreamVault/1.0",
+    }
+
+    try:
+        async with aiohttp.ClientSession() as sess:
+            movie_id = None
+
+            # 1. Look up movie ID by IMDb ID or Text query
+            if imdb_id and imdb_id.startswith("tt"):
+                search_url = f"{_SUBSOURCE_BASE}/movies/search?searchType=imdb&imdb={imdb_id}"
+                async with sess.get(search_url, headers=headers, timeout=10) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        items = data.get("data", [])
+                        if items and isinstance(items, list):
+                            movie_id = items[0].get("movieId") or items[0].get("id")
+            
+            if not movie_id and title:
+                # Clean title
+                clean_q = re.sub(r"(?i)\b(s\d+e\d+|s\d+|season\s*\d+|e\d+|ep\s*\d+|\d+x\d+)\b.*", "", title).strip()
+                search_url = f"{_SUBSOURCE_BASE}/movies/search?searchType=text&q={clean_q or title}"
+                async with sess.get(search_url, headers=headers, timeout=10) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        items = data.get("data", [])
+                        if items and isinstance(items, list):
+                            movie_id = items[0].get("movieId") or items[0].get("id")
+
+            if not movie_id:
+                return []
+
+            # 2. Fetch subtitles for this movie/show
+            lang_param = languages.lower() if languages else "english"
+            subs_url = f"{_SUBSOURCE_BASE}/subtitles?movieId={movie_id}&language={lang_param}&limit=30"
+            async with sess.get(subs_url, headers=headers, timeout=10) as resp:
+                if resp.status != 200:
+                    return []
+                subs_data = await resp.json()
+
+        results = []
+        for sub in subs_data.get("data", []):
+            sub_id = sub.get("subtitleId") or sub.get("id")
+            if not sub_id:
+                continue
+
+            # Check release info or commentary for descriptive filename
+            rel_info = sub.get("releaseInfo", [])
+            display_name = (
+                rel_info[0] if (isinstance(rel_info, list) and rel_info)
+                else (sub.get("commentary") or f"SubSource_{sub_id}")
+            )
+            # Remove line breaks from commentary if used
+            display_name = display_name.split("\n")[0].strip()
+
+            sub_season, sub_ep = extract_season_episode(display_name)
+            # If searching for TV show episode, filter by episode if available
+            if episode is not None and sub_ep is not None and sub_ep != episode:
+                continue
+            if season is not None and sub_season is not None and sub_season != season:
+                continue
+
+            results.append({
+                "id": str(sub_id),
+                "filename": display_name,
+                "url": f"{_SUBSOURCE_BASE}/subtitles/{sub_id}/download",
+                "language": sub.get("language", "English"),
+                "ext": "zip",
+                "hi": bool(sub.get("hearingImpaired", False)),
+                "score": 80.0,
+                "source": "subsource",
+                "season": sub_season,
+                "episode": sub_ep,
+            })
+
+        print(f"[subsource] Found {len(results)} subtitle(s) for '{title}'")
+        return results
+
+    except Exception as e:
+        print(f"[subsource] Search error for '{title}': {e}")
+        return []
+
+
+async def download_subsource_option(
+    msg_id: int,
+    url: str,
+    filename: str,
+    target_title: str = "",
+    target_filename: str = "",
+) -> str | None:
+    """Download a subtitle from SubSource (authenticated zip) and cache it."""
+    cache_path = os.path.join(SUB_DIR, f"{msg_id}_en.srt")
+    temp_path = cache_path + ".tmp"
+
+    api_key = getattr(_cfg, "SUBSOURCE_API_KEY", "")
+    headers = {
+        "User-Agent": "StreamVault/1.0",
+        "X-API-Key": api_key,
+    }
+
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(url, headers=headers, timeout=20) as resp:
+                if resp.status != 200:
+                    print(f"[subsource] Download failed: HTTP {resp.status} for {url}")
+                    return None
+                data = await resp.read()
+
+        with open(temp_path, "wb") as f:
+            f.write(data)
+
+        # SubSource delivers a .zip archive
+        try:
+            with tempfile.TemporaryDirectory() as extract_dir:
+                sub_files = _extract_all_recursive(temp_path, extract_dir)
+                if sub_files:
+                    chosen_name, norm_text = _find_best_file_in_archive_tree(
+                        sub_files, extract_dir, target_title, target_filename
+                    )
+                    if chosen_name and norm_text:
+                        print(f"[subsource] Extracted '{chosen_name}' from '{filename}'")
+                        with open(cache_path, "w", encoding="utf-8") as f:
+                            f.write(norm_text)
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                        return cache_path
+                print(f"[subsource] No subtitle found in zip '{filename}'")
+        except Exception as ze:
+            print(f"[subsource] Zip extract error for '{filename}': {ze}")
+
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return None
+
+    except Exception as e:
+        print(f"[subsource] Download error for '{filename}': {e}")
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return None
+
+
 # ── Yify online fallback ───────────────────────────────────────────────────────
 
 async def fetch_from_yify(msg_id: int, imdb_id: str) -> str | None:
@@ -1086,7 +1244,7 @@ async def list_subtitle_options(msg_id: int, title: str, filename: str) -> dict:
 
     # Online Subdl Options
     try:
-        if _cfg.SUBDL_API_KEY:
+        if getattr(_cfg, "SUBDL_API_KEY", ""):
             subdl_results = await search_subdl(
                 title=title,
                 season=v_s,
@@ -1109,6 +1267,32 @@ async def list_subtitle_options(msg_id: int, title: str, filename: str) -> dict:
                 })
     except Exception as e:
         print(f"[subtitles] Subdl options error: {e}")
+
+    # Online SubSource Options
+    try:
+        if getattr(_cfg, "SUBSOURCE_API_KEY", ""):
+            subsource_results = await search_subsource(
+                title=title,
+                season=v_s,
+                episode=v_e,
+                imdb_id=imdb_id,
+                languages="english",
+            )
+            for sub in subsource_results:
+                options.append({
+                    "id": sub["id"],
+                    "filename": sub["filename"],
+                    "score": sub["score"],
+                    "source": "subsource",
+                    "url": sub["url"],
+                    "language": sub.get("language", "English"),
+                    "hi": sub.get("hi", False),
+                    "ext": sub["ext"],
+                    "season": v_s,
+                    "episode": v_e,
+                })
+    except Exception as e:
+        print(f"[subtitles] SubSource options error: {e}")
 
     return {
         "ok": True,
@@ -1149,6 +1333,17 @@ async def apply_subtitle_option(
         if not url:
             return None
         return await download_subdl_option(
+            msg_id=msg_id,
+            url=url,
+            filename=filename,
+            target_title=title,
+            target_filename=target_filename,
+        )
+
+    if source == "subsource":
+        if not url:
+            return None
+        return await download_subsource_option(
             msg_id=msg_id,
             url=url,
             filename=filename,
