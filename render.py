@@ -64,7 +64,24 @@ def _read_static(name: str) -> str:
 
 BASE_CSS = _read_static("style.css")
 _MODAL_HTML = _read_static("modal.html")
-_VIRTUAL_ALBUM_JS = _read_static("virtual_album.js")
+
+def _get_virtual_album_js_tag():
+    """Return a <script src=...> tag with a hash-based cache buster so changes
+    are picked up immediately without a server restart or hard-refresh."""
+    import hashlib
+    path = os.path.join(_static_dir(), "virtual_album.js")
+    try:
+        with open(path, "rb") as f:
+            h = hashlib.md5(f.read()).hexdigest()[:8]
+        return f'<script src="/static/virtual_album.js?v={h}"></script>'
+    except Exception:
+        # Fallback: inline the JS as before
+        try:
+            with open(path, encoding="utf-8") as f:
+                return f"<script>\n{f.read()}\n</script>"
+        except Exception:
+            return ""
+
 
 # Limit concurrent blocking poster-download threads so asyncio.gather()
 # actually runs them in parallel instead of serialising on the executor pool.
@@ -1406,9 +1423,8 @@ function _deleteAlbum(name){{
   }});
 }}
 </script>
-{_MODAL_HTML}<script>
-{_VIRTUAL_ALBUM_JS}
-</script>"""
+{_MODAL_HTML}
+{_get_virtual_album_js_tag()}"""
         + _PAGE_CLOSE
         + """</body></html>"""
     )
