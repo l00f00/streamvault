@@ -605,9 +605,31 @@ async def download_subdl_option(
                 with tempfile.TemporaryDirectory() as extract_dir:
                     sub_files = _extract_all_recursive(temp_path, extract_dir)
                     if sub_files:
-                        chosen_name, norm_text = _find_best_file_in_archive_tree(
-                            sub_files, extract_dir, target_title, target_filename
-                        )
+                        chosen_name = None
+                        norm_text = None
+
+                        # 1. Try matching by chosen release / card filename
+                        if filename:
+                            chosen_name, norm_text = _find_best_file_in_archive_tree(
+                                sub_files, extract_dir, filename, filename
+                            )
+
+                        # 2. Try matching by target video title & filename
+                        if not chosen_name or not norm_text:
+                            chosen_name, norm_text = _find_best_file_in_archive_tree(
+                                sub_files, extract_dir, target_title, target_filename
+                            )
+
+                        # 3. Fallback: take largest / most complete subtitle file in archive
+                        if not chosen_name or not norm_text:
+                            valid_subs = [p for p in sub_files if p.lower().endswith((".srt", ".vtt", ".ass"))]
+                            if valid_subs:
+                                valid_subs.sort(key=lambda p: os.path.getsize(p) if os.path.exists(p) else 0, reverse=True)
+                                best_p = valid_subs[0]
+                                chosen_name = os.path.relpath(best_p, extract_dir).replace("\\", "/")
+                                with open(best_p, "rb") as f:
+                                    norm_text = _normalize_subtitle_text(f.read(), best_p)
+
                         if chosen_name and norm_text:
                             print(f"[subdl] Extracted '{chosen_name}' from '{filename}'")
                             with open(cache_path, "w", encoding="utf-8") as f:
@@ -781,9 +803,33 @@ async def download_subsource_option(
             with tempfile.TemporaryDirectory() as extract_dir:
                 sub_files = _extract_all_recursive(temp_path, extract_dir)
                 if sub_files:
-                    chosen_name, norm_text = _find_best_file_in_archive_tree(
-                        sub_files, extract_dir, target_title, target_filename
-                    )
+                    chosen_name = None
+                    norm_text = None
+
+                    # 1. Try matching by chosen release / card filename
+                    if filename:
+                        chosen_name, norm_text = _find_best_file_in_archive_tree(
+                            sub_files, extract_dir, filename, filename
+                        )
+                    
+                    # 2. Try matching by target video title & filename
+                    if not chosen_name or not norm_text:
+                        chosen_name, norm_text = _find_best_file_in_archive_tree(
+                            sub_files, extract_dir, target_title, target_filename
+                        )
+
+                    # 3. Fallback: take the largest / most complete subtitle file in archive
+                    if not chosen_name or not norm_text:
+                        # Prefer English or non-empty srt
+                        valid_subs = [p for p in sub_files if p.lower().endswith((".srt", ".vtt", ".ass"))]
+                        if valid_subs:
+                            # Sort by file size descending
+                            valid_subs.sort(key=lambda p: os.path.getsize(p) if os.path.exists(p) else 0, reverse=True)
+                            best_p = valid_subs[0]
+                            chosen_name = os.path.relpath(best_p, extract_dir).replace("\\", "/")
+                            with open(best_p, "rb") as f:
+                                norm_text = _normalize_subtitle_text(f.read(), best_p)
+
                     if chosen_name and norm_text:
                         print(f"[subsource] Extracted '{chosen_name}' from '{filename}'")
                         with open(cache_path, "w", encoding="utf-8") as f:
