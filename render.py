@@ -1231,26 +1231,44 @@ function openSubChooser(id, btn){{
     var html = '<h3 style="font-size:1.05rem;font-weight:700;color:#e8e8e8;margin-bottom:4px">Select Subtitle</h3>';
     html += '<div style="font-size:.76rem;color:#888;margin-bottom:14px;word-break:break-word">'+(d.title||d.filename||'')+'</div>';
     html += '<div class="sub-modal-list">';
-    d.options.forEach(function(opt){{
+    d.options.forEach(function(opt, idx){{
       var isTg = opt.source === 'telegram';
       var tagClass = isTg ? 'tg' : 'yify';
       var tagLabel = isTg ? 'Telegram' : 'Yify Online';
       var scoreLabel = opt.score > 0 ? (Math.round(Math.min(100, opt.score)) + '% Match') : '';
-      var subIdStr = opt.id !== null && opt.id !== undefined ? opt.id : 'null';
-      html += '<div class="sub-modal-item" id="sub_opt_'+(opt.id||'yify')+'">';
+      var subIdStr = (opt.id !== null && opt.id !== undefined) ? opt.id : 'null';
+      var itemId = 'sub_opt_' + (opt.id || 'yify') + '_' + idx;
+      html += '<div class="sub-modal-item" id="' + itemId + '">';
       html += '  <div style="flex:1;min-width:0">';
-      html += '    <div class="sub-modal-item-title">'+opt.filename+'</div>';
+      html += '    <div class="sub-modal-item-title">' + opt.filename + '</div>';
       html += '    <div class="sub-modal-item-meta">';
-      html += '      <span class="sub-modal-tag '+tagClass+'">'+tagLabel+'</span>';
-      if(scoreLabel) html += '      <span class="sub-modal-tag match">'+scoreLabel+'</span>';
-      if(opt.ext) html += '      <span style="text-transform:uppercase;color:#555">.'+opt.ext+'</span>';
+      html += '      <span class="sub-modal-tag ' + tagClass + '">' + tagLabel + '</span>';
+      if(scoreLabel) html += '      <span class="sub-modal-tag match">' + scoreLabel + '</span>';
+      if(opt.ext) html += '      <span style="text-transform:uppercase;color:#555">.' + opt.ext + '</span>';
       html += '    </div>';
       html += '  </div>';
-      html += '  <button class="sub-modal-select-btn" onclick="_applySub('+id+','+subIdStr+',\''+encodeURIComponent(opt.filename)+'\',\''+opt.source+'\',this)">Use This Subtitle</button>';
+      html += '  <button class="sub-modal-select-btn sub-apply-btn"'
+            + ' data-mid="' + id + '"'
+            + ' data-sid="' + subIdStr + '"'
+            + ' data-fn="' + encodeURIComponent(opt.filename) + '"'
+            + ' data-src="' + encodeURIComponent(opt.source) + '"'
+            + '>Use This Subtitle</button>';
       html += '</div>';
     }});
     html += '</div>';
     openModal(html);
+    // Wire up buttons via event delegation — avoids inline onclick quoting
+    setTimeout(function(){{
+      document.querySelectorAll('.sub-apply-btn').forEach(function(b){{
+        b.addEventListener('click', function(){{
+          var mid = parseInt(this.dataset.mid);
+          var sid = this.dataset.sid === 'null' ? null : parseInt(this.dataset.sid);
+          var fn  = decodeURIComponent(this.dataset.fn);
+          var src = decodeURIComponent(this.dataset.src);
+          _applySub(mid, sid, fn, src, this);
+        }});
+      }});
+    }}, 0);
   }})
   .catch(function(){{
     if(btn){{btn.innerHTML=btn.dataset.origHtml;}}
