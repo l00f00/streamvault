@@ -87,6 +87,14 @@ def _db_connect() -> sqlite3.Connection:
             value TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS active_subtitles (
+            msg_id      INTEGER PRIMARY KEY,
+            filename    TEXT NOT NULL,
+            source      TEXT NOT NULL,
+            applied_at  REAL DEFAULT 0
+        )
+    """)
     conn.commit()
     return conn
 
@@ -1215,6 +1223,23 @@ async def list_subtitle_options(msg_id: int, title: str, filename: str) -> dict:
     current_sub_path = os.path.join(SUB_DIR, f"{msg_id}_en.srt")
     has_active_sub = os.path.exists(current_sub_path)
 
+    # Get active subtitle info from DB
+    active_sub_name = ""
+    active_sub_source = ""
+    if has_active_sub:
+        try:
+            conn = _db_connect()
+            row = conn.execute(
+                "SELECT filename, source FROM active_subtitles WHERE msg_id=?",
+                (msg_id,),
+            ).fetchone()
+            if row:
+                active_sub_name = row[0]
+                active_sub_source = row[1]
+            conn.close()
+        except Exception:
+            pass
+
     options = []
     for sub_msg_id, sub_filename, score in candidates:
         s, e = extract_season_episode(sub_filename)
@@ -1227,6 +1252,7 @@ async def list_subtitle_options(msg_id: int, title: str, filename: str) -> dict:
             "ext": os.path.splitext(sub_filename)[1].lower().lstrip("."),
             "season": s,
             "episode": e,
+            "is_active": bool(active_sub_name and active_sub_name == sub_filename),
         })
 
     # Online Yify Option
@@ -1237,15 +1263,17 @@ async def list_subtitle_options(msg_id: int, title: str, filename: str) -> dict:
         imdb_id = pm.get("meta", {}).get("imdb_id")
         tmdb_id = pm.get("meta", {}).get("tmdb_id")
         if imdb_id:
+            yify_name = f"Yify Subtitles (IMDb {imdb_id})"
             options.append({
                 "id": None,
-                "filename": f"Yify Subtitles (IMDb {imdb_id})",
+                "filename": yify_name,
                 "score": 85.0,
                 "source": "yify",
                 "imdb_id": imdb_id,
                 "ext": "srt",
                 "season": v_s,
                 "episode": v_e,
+                "is_active": bool(active_sub_source == "yify"),
             })
     except Exception:
         imdb_id = None
@@ -1273,6 +1301,7 @@ async def list_subtitle_options(msg_id: int, title: str, filename: str) -> dict:
                     "ext": sub["ext"],
                     "season": v_s,
                     "episode": v_e,
+                    "is_active": bool(active_sub_name and active_sub_name == sub["filename"]),
                 })
     except Exception as e:
         print(f"[subtitles] Subdl options error: {e}")
@@ -1299,6 +1328,7 @@ async def list_subtitle_options(msg_id: int, title: str, filename: str) -> dict:
                     "ext": sub["ext"],
                     "season": v_s,
                     "episode": v_e,
+                    "is_active": bool(active_sub_name and active_sub_name == sub["filename"]),
                 })
     except Exception as e:
         print(f"[subtitles] SubSource options error: {e}")
@@ -1309,8 +1339,25 @@ async def list_subtitle_options(msg_id: int, title: str, filename: str) -> dict:
         "title": title,
         "filename": filename,
         "has_active_sub": has_active_sub,
+        "active_sub_name": active_sub_name,
+        "active_sub_source": active_sub_source,
         "options": options,
     }
+
+
+def _record_active_sub(msg_id: int, filename: str, source: str):
+    """Record which subtitle is currently active for this video."""
+    try:
+        conn = _db_connect()
+        conn.execute(
+            """INSERT OR REPLACE INTO active_subtitles (msg_id, filename, source, applied_at)
+               VALUES (?, ?, ?, ?)""",
+            (msg_id, filename, source, time.time()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[subtitles] Failed to record active sub: {e}")
 
 
 async def apply_subtitle_option(
@@ -1338,10 +1385,11 @@ async def apply_subtitle_option(
     title = video.get("title", "")
     target_filename = video.get("filename", "")
 
+    path = None
     if source == "subdl":
         if not url:
             return None
-        return await download_subdl_option(
+        path = await download_subdl_option(
             msg_id=msg_id,
             url=url,
             filename=filename,
@@ -1349,10 +1397,10 @@ async def apply_subtitle_option(
             target_filename=target_filename,
         )
 
-    if source == "subsource":
+    elif source == "subsource":
         if not url:
             return None
-        return await download_subsource_option(
+        path = await download_subsource_option(
             msg_id=msg_id,
             url=url,
             filename=filename,
@@ -1360,30 +1408,34 @@ async def apply_subtitle_option(
             target_filename=target_filename,
         )
 
-    if source == "yify":
+    elif source == "yify":
         pm = _cache._poster_mem.get(video.get("album", ""), {})
         imdb_id = pm.get("meta", {}).get("imdb_id")
         if imdb_id:
-            return await fetch_from_yify(msg_id, imdb_id)
-        return None
+            path = await fetch_from_yify(msg_id, imdb_id)
 
-    # Telegram source
-    from streaming import _get_entity
-    client = _cfg.client
-    if not client or not sub_msg_id:
-        return None
-    entity = await _get_entity()
-    if not entity:
-        return None
+    else:
+        # Telegram source
+        from streaming import _get_entity
+        client = _cfg.client
+        if not client or not sub_msg_id:
+            return None
+        entity = await _get_entity()
+        if not entity:
+            return None
 
-    return await _download_subtitle_msg(
-        client,
-        entity,
-        msg_id,
-        sub_msg_id,
-        filename,
-        target_title=title,
-        target_filename=target_filename,
-    )
+        path = await _download_subtitle_msg(
+            client,
+            entity,
+            msg_id,
+            sub_msg_id,
+            filename,
+            target_title=title,
+            target_filename=target_filename,
+        )
+
+    if path:
+        _record_active_sub(msg_id, filename, source)
+    return path
 
 

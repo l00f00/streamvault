@@ -1236,27 +1236,34 @@ function openSubChooser(id, btn){{
       var isSubdl = opt.source === 'subdl';
       var isSubSource = opt.source === 'subsource';
       var tagClass = isTg ? 'tg' : (isSubdl ? 'subdl' : (isSubSource ? 'subsource' : 'yify'));
-      var tagLabel = isTg ? 'Telegram' : (isSubdl ? 'Subdl (' + (opt.language || 'EN') + (opt.hi ? ' SDH' : '') + ')' : (isSubSource ? 'SubSource (' + (opt.language || 'EN') + (opt.hi ? ' SDH' : '') + ')' : 'Yify Online'));
+      var tagLabel = isTg ? 'Telegram Channel' : (isSubdl ? 'Subdl (' + (opt.language || 'EN') + (opt.hi ? ' SDH' : '') + ')' : (isSubSource ? 'SubSource (' + (opt.language || 'EN') + (opt.hi ? ' SDH' : '') + ')' : 'Yify Online'));
       var scoreLabel = opt.score > 0 ? (Math.round(Math.min(100, opt.score)) + '% Match') : '';
       var subIdStr = (opt.id !== null && opt.id !== undefined) ? opt.id : 'null';
       var optUrl = opt.url || '';
+      var isActive = opt.is_active || false;
       var itemId = 'sub_opt_' + (opt.id || opt.source || 'opt') + '_' + idx;
-      html += '<div class="sub-modal-item" id="' + itemId + '">';
+      var itemClass = 'sub-modal-item' + (isActive ? ' active' : '');
+      html += '<div class="' + itemClass + '" id="' + itemId + '">';
       html += '  <div style="flex:1;min-width:0">';
-      html += '    <div class="sub-modal-item-title">' + opt.filename + '</div>';
+      html += '    <div class="sub-modal-item-title">' + (isActive ? '<span style="color:#22c55e;margin-right:6px;font-weight:700;">&#10003;</span>' : '') + opt.filename + '</div>';
       html += '    <div class="sub-modal-item-meta">';
       html += '      <span class="sub-modal-tag ' + tagClass + '">' + tagLabel + '</span>';
+      if(isActive) html += '      <span class="sub-modal-tag active-tag" style="background:rgba(34,197,94,.15);color:#22c55e;border:1px solid rgba(34,197,94,.3);">ACTIVE</span>';
       if(scoreLabel && isTg) html += '      <span class="sub-modal-tag match">' + scoreLabel + '</span>';
       if(opt.ext) html += '      <span style="text-transform:uppercase;color:#555">.' + opt.ext + '</span>';
       html += '    </div>';
       html += '  </div>';
-      html += '  <button class="sub-modal-select-btn sub-apply-btn"'
-            + ' data-mid="' + id + '"'
-            + ' data-sid="' + subIdStr + '"'
-            + ' data-fn="' + encodeURIComponent(opt.filename) + '"'
-            + ' data-src="' + encodeURIComponent(opt.source) + '"'
-            + ' data-url="' + encodeURIComponent(optUrl) + '"'
-            + '>Use This Subtitle</button>';
+      if(isActive) {{
+        html += '  <button class="sub-modal-select-btn active" disabled>Active</button>';
+      }} else {{
+        html += '  <button class="sub-modal-select-btn sub-apply-btn"'
+              + ' data-mid="' + id + '"'
+              + ' data-sid="' + subIdStr + '"'
+              + ' data-fn="' + encodeURIComponent(opt.filename) + '"'
+              + ' data-src="' + encodeURIComponent(opt.source) + '"'
+              + ' data-url="' + encodeURIComponent(optUrl) + '"'
+              + '>Use This Subtitle</button>';
+      }}
       html += '</div>';
     }});
     html += '</div>';
