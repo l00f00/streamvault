@@ -104,7 +104,8 @@ async def _main():
             flood_sleep_threshold=20,
             request_retries=5,
         )
-        await _cfg.client.start()
+        # Headless deploy: a bot token avoids interactive phone/code login.
+        await _cfg.client.start(bot_token=_cfg.BOT_TOKEN) if _cfg.BOT_TOKEN else await _cfg.client.start()
         me = await _cfg.client.get_me()
         print(f"  ✓ Logged in as {me.first_name}")
     except Exception as e:
