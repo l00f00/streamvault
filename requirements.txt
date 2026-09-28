@@ -1,0 +1,8 @@
+aiohttp>=3.9,<4
+Telethon>=1.36,<2
+cryptg>=0.4
+orjson>=3.10
+python-dotenv>=1.0
+requests>=2.32
+Pillow>=10
+pyTelegramBotAPI>=4.24
